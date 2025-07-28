@@ -5,7 +5,6 @@ function isRunningInContainer(): boolean {
 	try {
 		// Method 1: Check for .dockerenv file
 		if (existsSync('/.dockerenv')) {
-			console.log('Puppeteer node: Container detected via .dockerenv file');
 			return true;
 		}
 
@@ -14,26 +13,24 @@ function isRunningInContainer(): boolean {
 			try {
 				const cgroupContent = readFileSync('/proc/1/cgroup', 'utf8');
 				if (cgroupContent.includes('docker') || cgroupContent.includes('kubepods')) {
-					console.log('Puppeteer node: Container detected via cgroup content');
 					return true;
 				}
 			} catch (error) {
-				console.log('Puppeteer node: cgroup check skipped');
+				// ignore
 			}
 		}
 
 		// Method 3: Check common container environment variables
-		if (process.env.KUBERNETES_SERVICE_HOST ||
+		if (
+			process.env.KUBERNETES_SERVICE_HOST ||
 			process.env.DOCKER_CONTAINER ||
-			process.env.DOCKER_HOST) {
-			console.log('Puppeteer node: Container detected via environment variables');
+			process.env.DOCKER_HOST
+		) {
 			return true;
 		}
 
 		return false;
 	} catch (error) {
-		// If any error occurs during checks, log and return false
-		console.log('Puppeteer node: Container detection failed:', (error as Error).message);
 		return false;
 	}
 }
@@ -57,6 +54,103 @@ export const nodeDescription: INodeTypeDescription = {
 	usableAsTool: true,
 	properties: [
 		{
+			displayName: 'Operation',
+			name: 'operation',
+			type: 'options',
+			noDataExpression: true,
+			options: [
+				{
+					name: 'Start Persistent Browser',
+					value: 'startPersistentBrowser',
+					description: 'Starts a new persistent browser session',
+					action: 'Starts a persistent browser session',
+				},
+				{
+					name: 'Stop Persistent Browser',
+					value: 'stopPersistentBrowser',
+					description: 'Stops the current persistent browser session',
+					action: 'Stops a persistent browser session',
+				},
+				{
+					name: 'Get Page Content',
+					value: 'getPageContent',
+					description: 'Gets the full HTML contents of the page',
+					action: 'Gets the page content',
+				},
+				{
+					name: 'Get PDF',
+					value: 'getPDF',
+					description: 'Captures all or part of the page as a PDF',
+					action: 'Gets a pdf',
+				},
+				{
+					name: 'Get Screenshot',
+					value: 'getScreenshot',
+					description: 'Captures all or part of the page as an image',
+					action: 'Gets a screenshot',
+				},
+				{
+					name: 'Run Custom Script',
+					value: 'runCustomScript',
+					description: 'Runs custom code to perform specific actions on the page',
+					action: 'Runs custom script',
+				},
+			],
+			default: 'getPageContent',
+		},
+
+		// ----------------------------------------
+		//      startPersistentBrowser
+		// ----------------------------------------
+		{
+			displayName: 'Session ID',
+			name: 'sessionId',
+			type: 'string',
+			default: 'n8n-session-{{ $execution.id }}',
+			description: 'A unique ID for the browser session. Re-using an ID will reconnect to an existing session.',
+			displayOptions: { show: { operation: ['startPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Browser Manager URL',
+			name: 'browserManagerUrl',
+			type: 'string',
+			default: 'http://127.0.0.1:3001',
+			description: 'The base URL of your browser manager service. Use 127.0.0.1 instead of localhost.',
+			displayOptions: { show: { operation: ['startPersistentBrowser'] } },
+		},
+
+		// ----------------------------------------
+		//      stopPersistentBrowser
+		// ----------------------------------------
+		{
+			displayName: 'Note',
+			name: 'stopNote',
+			type: 'notice',
+			default: 'This node automatically uses the current persistent session started in the workflow. The options below are only needed for manual testing or if the Stop node is disconnected from the Start node.',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Session ID (Fallback)',
+			name: 'stopSessionId',
+			type: 'string',
+			default: '',
+			description: 'Only required if this node cannot find an active session from a "Start" node in this workflow',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Browser Manager URL (Fallback)',
+			name: 'stopBrowserManagerUrl',
+			type: 'string',
+			default: 'http://127.0.0.1:3001',
+			description: 'Only required if this node cannot find an active session from a "Start" node in this workflow',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
+		},
+
+
+		// ----------------------------------------
+		//      getPageContent, getScreenshot, getPDF
+		// ----------------------------------------
+		{
 			displayName: 'URL',
 			name: 'url',
 			type: 'string',
@@ -68,34 +162,10 @@ export const nodeDescription: INodeTypeDescription = {
 				},
 			},
 		},
-		{
-			displayName: 'Operation',
-			name: 'operation',
-			type: 'options',
-			options: [
-				{
-					name: 'Get Page Content',
-					value: 'getPageContent',
-					description: 'Gets the full HTML contents of the page',
-				},
-				{
-					name: 'Get PDF',
-					value: 'getPDF',
-					description: 'Captures all or part of the page as a PDF',
-				},
-				{
-					name: 'Get Screenshot',
-					value: 'getScreenshot',
-					description: 'Captures all or part of the page as an image',
-				},
-				{
-					name: 'Run Custom Script',
-					value: 'runCustomScript',
-					description: 'Runs custom code to perform specific actions on the page',
-				},
-			],
-			default: 'getPageContent',
-		},
+
+		// ----------------------------------------
+		//      runCustomScript
+		// ----------------------------------------
 		{
 			displayName: 'Script Code',
 			name: 'scriptCode',
@@ -107,7 +177,7 @@ export const nodeDescription: INodeTypeDescription = {
 			},
 			required: true,
 			default:
-				'// Navigate to an IP lookup service\nawait $page.goto(\'https://httpbin.org/ip\');\n\n// Extract the IP address from the page content\nconst ipData = await $page.evaluate(() => {\n    const response = document.body.innerText;\n    const parsed = JSON.parse(response);\n    return parsed.origin;  // Extract the \'origin\' field, which typically contains the IP address\n});\n\nconsole.log("Hello, world!");\n\nconsole.log("IP Address", ipData);\n\n// Return the result in the required format\nreturn [{ ip: ipData, ...$json }];',
+				'// Navigate to an IP lookup service\nawait $page.goto(\'https://httpbin.org/ip\');\n\n// Extract the IP address from the page content\nconst ipData = await $page.evaluate(() => {\n    const response = document.body.innerText;\n    const parsed = JSON.parse(response);\n    return parsed.origin;  // Extract the \'origin\' field, which typically contains the IP address\n});\n\n// Return the result in the required format\nreturn [{ ip: ipData, ...$json }];',
 			description:
 				'JavaScript code to execute with Puppeteer. You have access to the $browser and $page objects, which represent the Puppeteer browser and page.',
 			noDataExpression: false,
@@ -129,6 +199,10 @@ export const nodeDescription: INodeTypeDescription = {
 			},
 			default: '',
 		},
+
+		// ----------------------------------------
+		//      getScreenshot, getPDF
+		// ----------------------------------------
 		{
 			displayName: 'Property Name',
 			name: 'dataPropertyName',
@@ -143,6 +217,10 @@ export const nodeDescription: INodeTypeDescription = {
 				},
 			},
 		},
+
+		// ----------------------------------------
+		//      getPDF
+		// ----------------------------------------
 		{
 			displayName: 'Page Ranges',
 			name: 'pageRanges',
@@ -193,62 +271,17 @@ export const nodeDescription: INodeTypeDescription = {
 			name: 'format',
 			type: 'options',
 			options: [
-				{
-					name: 'Letter',
-					value: 'Letter',
-					description: '8.5in x 11in',
-				},
-				{
-					name: 'Legal',
-					value: 'Legal',
-					description: '8.5in x 14in',
-				},
-				{
-					name: 'Tabloid',
-					value: 'Tabloid',
-					description: '11in x 17in',
-				},
-				{
-					name: 'Ledger',
-					value: 'Ledger',
-					description: '17in x 11in',
-				},
-				{
-					name: 'A0',
-
-					value: 'A0',
-					description: '33.1in x 46.8in',
-				},
-				{
-					name: 'A1',
-					value: 'A1',
-					description: '23.4in x 33.1in',
-				},
-				{
-					name: 'A2',
-					value: 'A2',
-					description: '16.54in x 23.4in',
-				},
-				{
-					name: 'A3',
-					value: 'A3',
-					description: '11.7in x 16.54in',
-				},
-				{
-					name: 'A4',
-					value: 'A4',
-					description: '8.27in x 11.7in',
-				},
-				{
-					name: 'A5',
-					value: 'A5',
-					description: '5.83in x 8.27in',
-				},
-				{
-					name: 'A6',
-					value: 'A6',
-					description: '4.13in x 5.83in',
-				},
+				{ name: 'Letter', value: 'Letter', description: '8.5in x 11in' },
+				{ name: 'Legal', value: 'Legal', description: '8.5in x 14in' },
+				{ name: 'Tabloid', value: 'Tabloid', description: '11in x 17in' },
+				{ name: 'Ledger', value: 'Ledger', description: '17in x 11in' },
+				{ name: 'A0', value: 'A0', description: '33.1in x 46.8in' },
+				{ name: 'A1', value: 'A1', description: '23.4in x 33.1in' },
+				{ name: 'A2', value: 'A2', description: '16.54in x 23.4in' },
+				{ name: 'A3', value: 'A3', description: '11.7in x 16.54in' },
+				{ name: 'A4', value: 'A4', description: '8.27in x 11.7in' },
+				{ name: 'A5', value: 'A5', description: '5.83in x 8.27in' },
+				{ name: 'A6', value: 'A6', description: '4.13in x 5.83in' },
 			],
 			default: 'Letter',
 			description:
@@ -316,34 +349,10 @@ export const nodeDescription: INodeTypeDescription = {
 				},
 			},
 			options: [
-				{
-					displayName: 'Top',
-					name: 'top',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Bottom',
-					name: 'bottom',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Left',
-					name: 'left',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Right',
-					name: 'right',
-					type: 'string',
-					default: '',
-					required: false,
-				},
+				{ displayName: 'Top', name: 'top', type: 'string', default: '', required: false },
+				{ displayName: 'Bottom', name: 'bottom', type: 'string', default: '', required: false },
+				{ displayName: 'Left', name: 'left', type: 'string', default: '', required: false },
+				{ displayName: 'Right', name: 'right', type: 'string', default: '', required: false },
 			],
 		},
 		{
@@ -362,20 +371,10 @@ export const nodeDescription: INodeTypeDescription = {
 		{
 			displayName: 'Header Template',
 			name: 'headerTemplate',
-			typeOptions: {
-				rows: 5,
-			},
+			typeOptions: { rows: 5 },
 			type: 'string',
 			default: "",
-			description: `HTML template for the print header. Should be valid HTML with the following classes used to inject values into them: - date formatted print date
-
-            - title document title
-
-            - url document location
-
-            - pageNumber current page number
-
-            - totalPages total pages in the document`,
+			description: `HTML template for the print header. Should be valid HTML with the following classes used to inject values into them: - date formatted print date, title document title, url document location, pageNumber current page number, totalPages total pages in the document`,
 			noDataExpression: true,
 			displayOptions: {
 				show: {
@@ -387,9 +386,7 @@ export const nodeDescription: INodeTypeDescription = {
 		{
 			displayName: 'Footer Template',
 			name: 'footerTemplate',
-			typeOptions: {
-				rows: 5,
-			},
+			typeOptions: { rows: 5 },
 			type: 'string',
 			default: "",
 			description: "HTML template for the print footer. Should be valid HTML with the following classes used to inject values into them: - date formatted print date",
@@ -428,23 +425,18 @@ export const nodeDescription: INodeTypeDescription = {
 			},
 			description: 'Set to true to include background graphics.',
 		},
+
+		// ----------------------------------------
+		//      getScreenshot
+		// ----------------------------------------
 		{
 			displayName: 'Type',
 			name: 'imageType',
 			type: 'options',
 			options: [
-				{
-					name: 'JPEG',
-					value: 'jpeg',
-				},
-				{
-					name: 'PNG',
-					value: 'png',
-				},
-				{
-					name: 'WebP',
-					value: 'webp',
-				},
+				{ name: 'JPEG', value: 'jpeg' },
+				{ name: 'PNG', value: 'png' },
+				{ name: 'WebP', value: 'webp' },
 			],
 			displayOptions: {
 				show: {
@@ -458,10 +450,7 @@ export const nodeDescription: INodeTypeDescription = {
 			displayName: 'Quality',
 			name: 'quality',
 			type: 'number',
-			typeOptions: {
-				minValue: 0,
-				maxValue: 100,
-			},
+			typeOptions: { minValue: 0, maxValue: 100 },
 			default: 100,
 			displayOptions: {
 				show: {
@@ -485,14 +474,16 @@ export const nodeDescription: INodeTypeDescription = {
 			},
 			description: 'When true, takes a screenshot of the full scrollable page.',
 		},
+
+		// ----------------------------------------
+		//      Query Parameters
+		// ----------------------------------------
 		{
 			displayName: 'Query Parameters',
 			name: 'queryParameters',
 			placeholder: 'Add Parameter',
 			type: 'fixedCollection',
-			typeOptions: {
-				multipleValues: true,
-			},
+			typeOptions: { multipleValues: true },
 			displayOptions: {
 				show: {
 					operation: ['getPageContent', 'getScreenshot', 'getPDF'],
@@ -505,49 +496,60 @@ export const nodeDescription: INodeTypeDescription = {
 					name: 'parameters',
 					displayName: 'Parameters',
 					values: [
-						{
-							displayName: 'Name',
-							name: 'name',
-							type: 'string',
-							default: '',
-							description: 'Name of the parameter.',
-						},
-						{
-							displayName: 'Value',
-							name: 'value',
-							type: 'string',
-							default: '',
-							description: 'Value of the parameter.',
-						},
+						{ displayName: 'Name', name: 'name', type: 'string', default: '', description: 'Name of the parameter.' },
+						{ displayName: 'Value', name: 'value', type: 'string', default: '', description: 'Value of the parameter.' },
 					],
 				},
 			],
 		},
+
+		// ----------------------------------------
+		//      Options
+		// ----------------------------------------
 		{
 			displayName: 'Options',
 			name: 'options',
 			type: 'collection',
 			placeholder: 'Add Option',
 			default: {},
+			displayOptions: {
+				show: {
+					operation: ['getPageContent', 'getScreenshot', 'getPDF', 'runCustomScript'],
+				},
+			},
 			options: [
 				{
-					displayName: 'Batch Size',
-					name: 'batchSize',
-					type: 'number',
-					typeOptions: {
-						minValue: 1,
-					},
-					default: 1,
-					description:
-						'Maximum number of pages to open simultaneously. More pages will consume more memory and CPU.',
+					displayName: 'Manual Session Override',
+					name: 'manualSessionOverride',
+					type: 'boolean',
+					default: false,
+					description: 'Enable to manually provide connection details for an existing persistent session. This is useful for debugging individual nodes.',
 				},
 				{
 					displayName: 'Browser WebSocket Endpoint',
-					name: 'browserWSEndpoint',
+					name: 'manualWsEndpoint',
 					type: 'string',
-					required: false,
 					default: '',
-					description: 'The WebSocket URL of the browser to connect to. When configured, puppeteer will skip the browser launch and connect to the browser instance.',
+					required: true,
+					description: 'The WebSocket URL of an existing browser session',
+					displayOptions: { show: { manualSessionOverride: [true] } },
+				},
+				{
+					displayName: 'Page ID',
+					name: 'manualPageId',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'The ID of the specific page to attach to in the existing session',
+					displayOptions: { show: { manualSessionOverride: [true] } },
+				},
+				{
+					displayName: 'Batch Size (Temporary Browser Only)',
+					name: 'batchSize',
+					type: 'number',
+					typeOptions: { minValue: 1, },
+					default: 1,
+					description: 'Maximum number of pages to open simultaneously. More pages will consume more memory and CPU. Only applies when not using a persistent session.',
 				},
 				{
 					displayName: 'Emulate Device',
@@ -555,28 +557,15 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'options',
 					description: 'Emulate a specific device.',
 					default: '',
-					typeOptions: {
-						loadOptionsMethod: 'getDevices',
-					},
+					typeOptions: { loadOptionsMethod: 'getDevices' },
 					required: false,
-				},
-				{
-					displayName: 'Executable path',
-					name: 'executablePath',
-					type: 'string',
-					required: false,
-					default: '',
-					description:
-						'A path where Puppeteer expects to find the bundled browser. Has no effect when \'Browser WebSocket Endpoint\' is set.',
 				},
 				{
 					displayName: 'Extra Headers',
 					name: 'headers',
 					placeholder: 'Add Header',
 					type: 'fixedCollection',
-					typeOptions: {
-						multipleValues: true,
-					},
+					typeOptions: { multipleValues: true },
 					description: 'The headers to send.',
 					default: {},
 					options: [
@@ -584,20 +573,8 @@ export const nodeDescription: INodeTypeDescription = {
 							name: 'parameter',
 							displayName: 'Header',
 							values: [
-								{
-									displayName: 'Name',
-									name: 'name',
-									type: 'string',
-									default: '',
-									description: 'Name of the header.',
-								},
-								{
-									displayName: 'Value',
-									name: 'value',
-									type: 'string',
-									default: '',
-									description: 'Value to set for the header.',
-								},
+								{ displayName: 'Name', name: 'name', type: 'string', default: '', description: 'Name of the header.' },
+								{ displayName: 'Value', name: 'value', type: 'string', default: '', description: 'Value to set for the header.' },
 							],
 						},
 					],
@@ -610,80 +587,30 @@ export const nodeDescription: INodeTypeDescription = {
 					description: 'File name to set in binary data. Only applies to \'Get PDF\' and \'Get Screenshot\' operations.',
 				},
 				{
-					displayName: 'Launch Arguments',
-					name: 'launchArguments',
-					placeholder: 'Add Argument',
-					type: 'fixedCollection',
-					typeOptions: {
-						multipleValues: true,
-					},
-					description:
-						'Additional command line arguments to pass to the browser instance. Has no effect when \'Browser WebSocket Endpoint\' is set.',
-					default: {},
-					options: [
-						{
-							name: 'args',
-							displayName: '',
-							values: [
-								{
-									displayName: 'Argument',
-									name: 'arg',
-									type: 'string',
-									default: '',
-									description:
-										'The command line argument to pass to the browser instance.',
-								},
-							],
-						},
-					],
-				},
-				{
 					displayName: 'Timeout',
 					name: 'timeout',
 					type: 'number',
-					typeOptions: {
-						minValue: 0,
-					},
+					typeOptions: { minValue: 0 },
 					default: 30000,
-					description:
-						'Maximum navigation time in milliseconds. Pass 0 to disable timeout. Has no effect on the \'Run Custom Script\' operation.',
+					description: 'Maximum navigation time in milliseconds. Pass 0 to disable timeout. Has no effect on the \'Run Custom Script\' operation.',
 				},
 				{
 					displayName: 'Protocol Timeout',
 					name: 'protocolTimeout',
 					type: 'number',
-					typeOptions: {
-						minValue: 0,
-					},
+					typeOptions: { minValue: 0 },
 					default: 30000,
-					description:
-						'Maximum time in milliseconds to wait for a protocol response. Pass 0 to disable timeout.',
+					description: 'Maximum time in milliseconds to wait for a protocol response. Pass 0 to disable timeout.',
 				},
 				{
 					displayName: 'Wait Until',
 					name: 'waitUntil',
 					type: 'options',
 					options: [
-						{
-							name: 'load',
-							value: 'load',
-							description: 'The load event is fired',
-						},
-						{
-							name: 'domcontentloaded',
-							value: 'domcontentloaded',
-							description: 'The domcontentloaded event is fired',
-						},
-						{
-							name: 'networkidle0',
-							value: 'networkidle0',
-							description: 'No more than 0 connections for at least 500 ms',
-						},
-						{
-							name: 'networkidle2',
-							value: 'networkidle2',
-							description: 'No more than 2 connections for at least 500 ms',
-						},
+						{ name: 'load', value: 'load', description: 'The load event is fired' },
+						{ name: 'domcontentloaded', value: 'domcontentloaded', description: 'The domcontentloaded event is fired' },
+						{ name: 'networkidle0', value: 'networkidle0', description: 'No more than 0 connections for at least 500 ms' },
+						{ name: 'networkidle2', value: 'networkidle2', description: 'No more than 2 connections for at least 500 ms' },
 					],
 					default: 'load',
 					description: 'When to consider navigation succeeded. Has no effect on the \'Run Custom Script\' operation.',
@@ -694,26 +621,15 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: true,
-					description:
-						'Whether to enable page level caching. Defaults to true.',
+					description: 'Whether to enable page level caching. Defaults to true.',
 				},
 				{
-					displayName: 'Headless mode',
-					name: 'headless',
-					type: 'boolean',
+					displayName: 'Proxy Server (Temporary Browser Only)',
+					name: 'proxyServer',
+					type: 'string',
 					required: false,
-					default: true,
-					description:
-						'Whether to run browser in headless mode. Defaults to true.',
-				},
-				{
-					displayName: 'Use Chrome Headless Shell',
-					name: 'shell',
-					type: 'boolean',
-					required: false,
-					default: false,
-					description:
-						'Whether to run browser in headless shell mode. Defaults to false. Headless mode must be enabled. chrome-headless-shell must be in $PATH.',
+					default: '',
+					description: 'This tells Puppeteer to use a custom proxy configuration. Examples: localhost:8080, socks5://localhost:1080, etc. Only applies when not using a persistent session.',
 				},
 				{
 					displayName: 'Stealth mode',
@@ -721,8 +637,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: false,
-					description:
-						'When enabled, applies various techniques to make detection of headless Puppeteer harder.',
+					description: 'When enabled, applies various techniques to make detection of headless Puppeteer harder.',
 				},
 				{
 					displayName: 'Human typing mode',
@@ -730,8 +645,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: false,
-					description:
-						'Gives page the function .typeHuman() which "humanizes" the writing of input elements',
+					description: 'Gives page the function .typeHuman() which "humanizes" the writing of input elements',
 				},
 				{
 					displayName: 'Human Typing Options',
@@ -745,72 +659,73 @@ export const nodeDescription: INodeTypeDescription = {
 						},
 					},
 					options: [
-						{
-							displayName: 'Backspace Maximum Delay (ms)',
-							name: 'backspaceMaximumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 750 * 2,
-							description: 'Maximum delay for simulating backspaces in milliseconds',
-						},
-						{
-							displayName: 'Backspace Minimum Delay (ms)',
-							name: 'backspaceMinimumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 750,
-							description: 'Minimum delay for simulating backspaces in milliseconds',
-						},
-						{
-							displayName: 'Maximum Delay (ms)',
-							name: 'maximumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 650,
-							description: 'Maximum delay between keystrokes in milliseconds',
-						},
-						{
-							displayName: 'Minimum Delay (ms)',
-							name: 'minimumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 150,
-							description: 'Minimum delay between keystrokes in milliseconds',
-						},
-						{
-							displayName: 'Chance to Keep a Typo (%)',
-							name: 'chanceToKeepATypoInPercent',
-							type: 'number',
-							required: false,
-							default: 0,
-							description: 'Percentage chance to keep a typo',
-						},
-						{
-							displayName: 'Typo Chance (%)',
-							name: 'typoChanceInPercent',
-							type: 'number',
-							required: false,
-							default: 15,
-							description: 'Percentage chance to make a typo',
-						},
+						{ displayName: 'Backspace Maximum Delay (ms)', name: 'backspaceMaximumDelayInMs', type: 'number', required: false, default: 750 * 2, description: 'Maximum delay for simulating backspaces in milliseconds' },
+						{ displayName: 'Backspace Minimum Delay (ms)', name: 'backspaceMinimumDelayInMs', type: 'number', required: false, default: 750, description: 'Minimum delay for simulating backspaces in milliseconds' },
+						{ displayName: 'Maximum Delay (ms)', name: 'maximumDelayInMs', type: 'number', required: false, default: 650, description: 'Maximum delay between keystrokes in milliseconds' },
+						{ displayName: 'Minimum Delay (ms)', name: 'minimumDelayInMs', type: 'number', required: false, default: 150, description: 'Minimum delay between keystrokes in milliseconds' },
+						{ displayName: 'Chance to Keep a Typo (%)', name: 'chanceToKeepATypoInPercent', type: 'number', required: false, default: 0, description: 'Percentage chance to keep a typo' },
+						{ displayName: 'Typo Chance (%)', name: 'typoChanceInPercent', type: 'number', required: false, default: 15, description: 'Percentage chance to make a typo' },
 					],
 				},
 				{
-					displayName: 'Proxy Server',
-					name: 'proxyServer',
-					type: 'string',
-					required: false,
-					default: '',
-					description:
-						'This tells Puppeteer to use a custom proxy configuration. Examples: localhost:8080, socks5://localhost:1080, etc.',
-				},
-				{
-					displayName: 'Add Container Arguments',
-					name: 'addContainerArgs',
-					type: 'boolean',
-					default: isRunningInContainer(),
-					description: 'Whether to add recommended arguments for container environments (--no-sandbox, --disable-setuid-sandbox, --disable-dev-shm-usage, --disable-gpu)',
-					required: false,
+					displayName: 'Launch Options (Temporary Browser Only)',
+					name: 'launchOptions',
+					type: 'collection',
+					placeholder: 'Add Launch Option',
+					default: {},
+					description: 'Configure browser launch options. These settings only apply when not using a persistent session.',
+					options: [
+						{
+							displayName: 'Executable path',
+							name: 'executablePath',
+							type: 'string',
+							required: false,
+							default: '',
+							description: 'A path where Puppeteer expects to find the bundled browser.',
+						},
+						{
+							displayName: 'Launch Arguments',
+							name: 'launchArguments',
+							placeholder: 'Add Argument',
+							type: 'fixedCollection',
+							typeOptions: { multipleValues: true },
+							description: 'Additional command line arguments to pass to the browser instance.',
+							default: {},
+							options: [
+								{
+									name: 'args',
+									displayName: '',
+									values: [
+										{ displayName: 'Argument', name: 'arg', type: 'string', default: '', description: 'The command line argument to pass to the browser instance.' },
+									],
+								},
+							],
+						},
+						{
+							displayName: 'Add Container Arguments',
+							name: 'addContainerArgs',
+							type: 'boolean',
+							default: isRunningInContainer(),
+							description: 'Whether to add recommended arguments for container environments (--no-sandbox, --disable-setuid-sandbox, --disable-dev-shm-usage, --disable-gpu)',
+							required: false,
+						},
+						{
+							displayName: 'Headless mode',
+							name: 'headless',
+							type: 'boolean',
+							required: false,
+							default: true,
+							description: 'Whether to run browser in headless mode. Defaults to true.',
+						},
+						{
+							displayName: 'Use Chrome Headless Shell',
+							name: 'shell',
+							type: 'boolean',
+							required: false,
+							default: false,
+							description: 'Whether to run browser in headless shell mode. Defaults to false. Headless mode must be enabled. chrome-headless-shell must be in $PATH.',
+						},
+					]
 				},
 			],
 		},

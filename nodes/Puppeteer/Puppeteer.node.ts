@@ -13,7 +13,7 @@ import { makeResolverFromLegacyOptions, NodeVM } from '@n8n/vm2';
 import puppeteer from 'puppeteer-extra';
 import pluginStealth from 'puppeteer-extra-plugin-stealth';
 //@ts-ignore
-import pluginHumanTyping from 'puppeteer-extra-plugin-human-typing'; 
+import pluginHumanTyping from 'puppeteer-extra-plugin-human-typing';
 import {
 	type Browser,
 	type Device,
@@ -41,12 +41,7 @@ const CONTAINER_LAUNCH_ARGS = [
 ];
 
 export const vmResolver = makeResolverFromLegacyOptions({
-	external: external
-		? {
-				modules: external.split(','),
-				transitive: false,
-			}
-		: false,
+	external: external ? { modules: external.split(','), transitive: false } : false,
 	builtin: builtIn?.split(',') ?? [],
 });
 
@@ -59,20 +54,12 @@ interface QueryParameter {
 	value: string;
 }
 
-type ErrorResponse = INodeExecutionData & {
-	json: {
-		error: string;
-		url?: string;
-		headers?: HeaderObject;
-		statusCode?: number;
-		body?: string;
-	};
-	pairedItem: {
-		item: number;
-	};
-	[key: string]: unknown;
-	error: Error;
-};
+interface PuppeteerSessionData {
+	wsEndpoint: string;
+	pageId: string;
+	sessionId: string;
+	browserManagerUrl: string;
+}
 
 const DEFAULT_USER_AGENT =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.75 Safari/537.36';
@@ -83,50 +70,41 @@ async function handleError(
 	itemIndex: number,
 	url?: string,
 	page?: Page,
-): Promise<INodeExecutionData[]> {
-	if (page) {
+): Promise<INodeExecutionData> {
+	if (page && !page.isClosed()) {
 		try {
 			await page.close();
 		} catch (closeError) {
-			console.error('Error closing page:', closeError);
+			console.error(`Puppeteer node: Error closing page during error handling: ${ (closeError as Error).message }`);
 		}
 	}
 
-	if (this.continueOnFail()) {
-		const nodeOperationError = new NodeOperationError(this.getNode(), error.message);
+	const nodeOperationError = new NodeOperationError(this.getNode(), error, { itemIndex });
 
-		const errorResponse: ErrorResponse = {
+	if (this.continueOnFail()) {
+		const errorResponse: INodeExecutionData = {
 			json: {
-				error: error.message,
+				error: nodeOperationError.message,
+				stack: nodeOperationError.stack,
 			},
 			pairedItem: {
 				item: itemIndex,
 			},
 			error: nodeOperationError,
 		};
-
-		if (url) {
-			errorResponse.json.url = url;
-		}
-
-		return [errorResponse];
+		if (url) errorResponse.json.url = url;
+		return errorResponse;
 	}
 
-	throw new NodeOperationError(this.getNode(), error.message);
+	throw nodeOperationError;
 }
 
-async function handleOptions(
-	this: IExecuteFunctions,
-	itemIndex: number,
-	items: INodeExecutionData[],
-	browser: Browser,
-	page: Page,
-): Promise<void> {
+async function handleOptions(this: IExecuteFunctions, page: Page): Promise<void> {
 	const options = this.getNodeParameter('options', 0, {}) as IDataObject;
 	const pageCaching = options.pageCaching !== false;
 	const headers: HeaderObject = (options.headers || {}) as HeaderObject;
 
-	const requestHeaders = (headers.parameter || []).reduce((acc, header) => {
+	const requestHeaders = (headers.parameter || []).reduce((acc: IDataObject, header) => {
 		acc[header.name] = header.value;
 		return acc;
 	}, {});
@@ -141,26 +119,25 @@ async function handleOptions(
 		}
 	} else {
 		const userAgent =
-			requestHeaders['User-Agent'] ||
-			requestHeaders['user-agent'] ||
+			(requestHeaders['User-Agent'] as string) ||
+			(requestHeaders['user-agent'] as string) ||
 			DEFAULT_USER_AGENT;
 		await page.setUserAgent(userAgent);
 	}
 
-	await page.setExtraHTTPHeaders(requestHeaders);
+	await page.setExtraHTTPHeaders(requestHeaders as Record<string, string>);
 }
 
 async function runCustomScript(
 	this: IExecuteFunctions,
 	itemIndex: number,
-	items: INodeExecutionData[],
 	browser: Browser,
 	page: Page,
 ): Promise<INodeExecutionData[]> {
 	const scriptCode = this.getNodeParameter('scriptCode', itemIndex) as string;
 	const context = {
-		$getNodeParameter: this.getNodeParameter,
-		$getWorkflowStaticData: this.getWorkflowStaticData,
+		$getNodeParameter: this.getNodeParameter.bind(this),
+		$getWorkflowStaticData: this.getWorkflowStaticData.bind(this),
 		helpers: {
 			...this.helpers,
 			httpRequestWithAuthentication: this.helpers.httpRequestWithAuthentication.bind(this),
@@ -194,20 +171,13 @@ async function runCustomScript(
 		);
 
 		if (!Array.isArray(scriptResult)) {
-			return handleError.call(
-				this,
-				new Error(
-					'Custom script must return an array of items. Please ensure your script returns an array, e.g., return [{ key: value }].',
-				),
-				itemIndex,
-				undefined,
-				page,
-			);
+			throw new Error('Custom script must return an array of items. Please ensure your script returns an array, e.g., return [{ key: value }].');
 		}
 
 		return this.helpers.normalizeItems(scriptResult);
 	} catch (error) {
-		return handleError.call(this, error as Error, itemIndex, undefined, page);
+		// Re-throwing the error to be caught by the main handler
+		throw error;
 	}
 }
 
@@ -217,426 +187,294 @@ async function processPageOperation(
 	url: URL,
 	page: Page,
 	itemIndex: number,
-	options: IDataObject,
 ): Promise<INodeExecutionData[]> {
+	const options = this.getNodeParameter('options', 0, {}) as IDataObject;
 	const waitUntil = options.waitUntil as PuppeteerLifeCycleEvent;
 	const timeout = options.timeout as number;
 
-	try {
-		const response = await page.goto(url.toString(), {
-			waitUntil,
-			timeout,
-		});
+	const response = await page.goto(url.toString(), {
+		waitUntil,
+		timeout,
+	});
 
-		const headers = await response?.headers();
-		const statusCode = response?.status();
+	const headers = await response?.headers();
+	const statusCode = response?.status();
 
-		if (!response || (statusCode && statusCode >= 400)) {
-			return handleError.call(
-				this,
-				new Error(`Request failed with status code ${statusCode || 0}`),
-				itemIndex,
-				url.toString(),
-				page,
-			);
+	if (!response || (statusCode && statusCode >= 400)) {
+		throw new Error(`Request failed with status code ${statusCode || 'unknown'}`);
+	}
+
+	const baseJson = {
+		headers,
+		statusCode,
+		url: url.toString(),
+	};
+
+	if (operation === 'getPageContent') {
+		const body = await page.content();
+		return [{
+			json: { ...baseJson, body },
+			pairedItem: { item: itemIndex },
+		}];
+	}
+
+	if (operation === 'getScreenshot') {
+		const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
+		const fileName = options.fileName as string;
+		const type = this.getNodeParameter('imageType', itemIndex) as ScreenshotOptions['type'];
+		const fullPage = this.getNodeParameter('fullPage', itemIndex) as boolean;
+		const screenshotOptions: ScreenshotOptions = { type, fullPage };
+
+		if (type !== 'png') {
+			screenshotOptions.quality = this.getNodeParameter('quality', itemIndex) as number;
 		}
 
-		if (operation === 'getPageContent') {
-			const body = await page.content();
+		const screenshot = await page.screenshot(screenshotOptions);
+		if (screenshot) {
+			const binaryData = await this.helpers.prepareBinaryData(
+				Buffer.from(screenshot),
+				fileName,
+				`image/${type}`,
+			);
 			return [{
-				json: {
-					body,
-					headers,
-					statusCode,
-					url: url.toString(),
-				},
-				pairedItem: {
-					item: itemIndex,
-				},
+				binary: { [dataPropertyName]: binaryData },
+				json: baseJson,
+				pairedItem: { item: itemIndex },
 			}];
 		}
-
-		if (operation === 'getScreenshot') {
-			try {
-				const dataPropertyName = this.getNodeParameter(
-					'dataPropertyName',
-					itemIndex,
-				) as string;
-				const fileName = options.fileName as string;
-				const type = this.getNodeParameter(
-					'imageType',
-					itemIndex,
-				) as ScreenshotOptions['type'];
-				const fullPage = this.getNodeParameter(
-					'fullPage',
-					itemIndex,
-				) as boolean;
-				const screenshotOptions: ScreenshotOptions = {
-					type,
-					fullPage,
-				};
-
-				if (type !== 'png') {
-					const quality = this.getNodeParameter(
-						'quality',
-						itemIndex,
-					) as number;
-					screenshotOptions.quality = quality;
-				}
-
-				if (fileName) {
-					screenshotOptions.path = fileName;
-				}
-
-				const screenshot = await page.screenshot(screenshotOptions);
-				if (screenshot) {
-					const binaryData = await this.helpers.prepareBinaryData(
-						Buffer.from(screenshot),
-						screenshotOptions.path,
-						`image/${type}`,
-					);
-					return [{
-						binary: { [dataPropertyName]: binaryData },
-						json: {
-							headers,
-							statusCode,
-							url: url.toString(),
-						},
-						pairedItem: {
-							item: itemIndex,
-						},
-					}];
-				}
-			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, url.toString(), page);
-			}
-		}
-
-		if (operation === 'getPDF') {
-			try {
-				const dataPropertyName = this.getNodeParameter(
-					'dataPropertyName',
-					itemIndex,
-				) as string;
-				const pageRanges = this.getNodeParameter(
-					'pageRanges',
-					itemIndex,
-				) as string;
-				const displayHeaderFooter = this.getNodeParameter(
-					'displayHeaderFooter',
-					itemIndex,
-				) as boolean;
-				const omitBackground = this.getNodeParameter(
-					'omitBackground',
-					itemIndex,
-				) as boolean;
-				const printBackground = this.getNodeParameter(
-					'printBackground',
-					itemIndex,
-				) as boolean;
-				const landscape = this.getNodeParameter(
-					'landscape',
-					itemIndex,
-				) as boolean;
-				const preferCSSPageSize = this.getNodeParameter(
-					'preferCSSPageSize',
-					itemIndex,
-				) as boolean;
-				const scale = this.getNodeParameter('scale', itemIndex) as number;
-				const margin = this.getNodeParameter(
-					'margin',
-					0,
-					{},
-				) as IDataObject;
-
-				let headerTemplate = '';
-				let footerTemplate = '';
-				let height = '';
-				let width = '';
-				let format: PaperFormat = 'A4';
-
-				if (displayHeaderFooter === true) {
-					headerTemplate = this.getNodeParameter(
-						'headerTemplate',
-						itemIndex,
-					) as string;
-					footerTemplate = this.getNodeParameter(
-						'footerTemplate',
-						itemIndex,
-					) as string;
-				}
-
-				if (preferCSSPageSize !== true) {
-					height = this.getNodeParameter('height', itemIndex) as string;
-					width = this.getNodeParameter('width', itemIndex) as string;
-
-					if (!height || !width) {
-						format = this.getNodeParameter(
-							'format',
-							itemIndex,
-						) as PaperFormat;
-					}
-				}
-
-				const pdfOptions: PDFOptions = {
-					format,
-					displayHeaderFooter,
-					omitBackground,
-					printBackground,
-					landscape,
-					headerTemplate,
-					footerTemplate,
-					preferCSSPageSize,
-					scale,
-					height,
-					width,
-					pageRanges,
-					margin,
-				};
-				const fileName = options.fileName as string;
-				if (fileName) {
-					pdfOptions.path = fileName;
-				}
-
-				const pdf = await page.pdf(pdfOptions);
-				if (pdf) {
-					const binaryData = await this.helpers.prepareBinaryData(
-						Buffer.from(pdf),
-						pdfOptions.path,
-						'application/pdf',
-					);
-					return [{
-						binary: { [dataPropertyName]: binaryData },
-						json: {
-							headers,
-							statusCode,
-							url: url.toString(),
-						},
-						pairedItem: {
-							item: itemIndex,
-						},
-					}];
-				}
-			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, url.toString(), page);
-			}
-		}
-
-		return handleError.call(
-			this,
-			new Error(`Unsupported operation: ${operation}`),
-			itemIndex,
-			url.toString(),
-			page,
-		);
-	} catch (error) {
-		return handleError.call(this, error as Error, itemIndex, url.toString(), page);
 	}
+
+	if (operation === 'getPDF') {
+		const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
+		const fileName = options.fileName as string;
+
+		const pdfOptions: PDFOptions = {
+			pageRanges: this.getNodeParameter('pageRanges', itemIndex) as string,
+			displayHeaderFooter: this.getNodeParameter('displayHeaderFooter', itemIndex) as boolean,
+			omitBackground: this.getNodeParameter('omitBackground', itemIndex) as boolean,
+			printBackground: this.getNodeParameter('printBackground', itemIndex) as boolean,
+			landscape: this.getNodeParameter('landscape', itemIndex) as boolean,
+			preferCSSPageSize: this.getNodeParameter('preferCSSPageSize', itemIndex) as boolean,
+			scale: this.getNodeParameter('scale', itemIndex) as number,
+			margin: this.getNodeParameter('margin', itemIndex, {}) as IDataObject,
+		};
+		if (pdfOptions.displayHeaderFooter) {
+			pdfOptions.headerTemplate = this.getNodeParameter('headerTemplate', itemIndex) as string;
+			pdfOptions.footerTemplate = this.getNodeParameter('footerTemplate', itemIndex) as string;
+		}
+		if (!pdfOptions.preferCSSPageSize) {
+			pdfOptions.height = this.getNodeParameter('height', itemIndex) as string;
+			pdfOptions.width = this.getNodeParameter('width', itemIndex) as string;
+			if (!pdfOptions.height && !pdfOptions.width) {
+				pdfOptions.format = this.getNodeParameter('format', itemIndex) as PaperFormat;
+			}
+		}
+
+		const pdf = await page.pdf(pdfOptions);
+		if (pdf) {
+			const binaryData = await this.helpers.prepareBinaryData(Buffer.from(pdf), fileName, 'application/pdf');
+			return [{
+				binary: { [dataPropertyName]: binaryData },
+				json: baseJson,
+				pairedItem: { item: itemIndex },
+			}];
+		}
+	}
+	// Fallback for unexpected empty results
+	return [];
 }
+
 
 export class Puppeteer implements INodeType {
 	description: INodeTypeDescription = nodeDescription;
 
 	methods = {
 		loadOptions: {
-			async getDevices(
-				this: ILoadOptionsFunctions,
-			): Promise<INodePropertyOptions[]> {
+			async getDevices(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const deviceNames = Object.keys(devices);
-				const returnData: INodePropertyOptions[] = [];
-
-				for (const name of deviceNames) {
+				return deviceNames.map(name => {
 					const device = devices[name as keyof typeof devices] as Device;
-					returnData.push({
+					return {
 						name,
 						value: name,
 						description: `${device.viewport.width} x ${device.viewport.height} @ ${device.viewport.deviceScaleFactor}x`,
-					});
-				}
-
-				return returnData;
+					};
+				});
 			},
 		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const operation = this.getNodeParameter('operation', 0) as string;
+
+		// --- SESSION MANAGEMENT OPERATIONS ---
+		if (operation === 'startPersistentBrowser') {
+			const sessionId = this.getNodeParameter('sessionId', 0) as string;
+			const browserManagerUrl = this.getNodeParameter('browserManagerUrl', 0) as string;
+			try {
+				const response = await this.helpers.httpRequest({
+					method: 'POST',
+					url: `${browserManagerUrl}/start`,
+					headers: { 'Content-Type': 'application/json' },
+					body: { sessionId },
+					json: true,
+				}) as IDataObject;
+				const sessionData: PuppeteerSessionData = {
+					wsEndpoint: response.wsEndpoint as string,
+					pageId: response.pageId as string,
+					sessionId: response.sessionId as string,
+					browserManagerUrl: browserManagerUrl,
+				};
+				this.getWorkflowStaticData('global').puppeteerSession = sessionData;
+				return [this.helpers.returnJsonArray([sessionData as unknown as IDataObject])];
+			} catch (error) {
+				throw new NodeOperationError(this.getNode(), error as Error, { description: 'Failed to start browser session from manager.' });
+			}
+		}
+
+		if (operation === 'stopPersistentBrowser') {
+			let session = this.getWorkflowStaticData('global').puppeteerSession as PuppeteerSessionData | undefined;
+			const sessionId = session?.sessionId ?? this.getNodeParameter('stopSessionId', 0) as string;
+			const browserManagerUrl = session?.browserManagerUrl ?? this.getNodeParameter('stopBrowserManagerUrl', 0) as string;
+
+			if (!sessionId || !browserManagerUrl) {
+				throw new NodeOperationError(this.getNode(), 'Could not find a session to stop. Provide a fallback Session ID or ensure a Start node ran.');
+			}
+			try {
+				await this.helpers.httpRequest({
+					method: 'POST',
+					url: `${browserManagerUrl}/stop`,
+					headers: { 'Content-Type': 'application/json' },
+					body: { sessionId },
+					json: true,
+				});
+				if (session) delete this.getWorkflowStaticData('global').puppeteerSession;
+				return [this.helpers.returnJsonArray([{ message: 'Session stopped successfully.' }])];
+			} catch (error) {
+				throw new NodeOperationError(this.getNode(), error as Error, { description: 'Failed to stop browser session.' });
+			}
+		}
+
+		// --- ACTION OPERATIONS ---
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 		const options = this.getNodeParameter('options', 0, {}) as IDataObject;
-		const operation = this.getNodeParameter('operation', 0) as string;
-		let headless: 'shell' | boolean = options.headless !== false;
-		const headlessShell = options.shell === true;
-		const executablePath = options.executablePath as string;
-		const browserWSEndpoint = options.browserWSEndpoint as string;
-		const stealth = options.stealth === true;
-		const humanTyping = options.humanTyping === true;
-		const humanTypingOptions =  {
-			keyboardLayout: "en",
-			...((options.humanTypingOptions as IDataObject) || {})
-		};
-		const launchArguments = (options.launchArguments as IDataObject) || {};
-		const launchArgs: IDataObject[] = launchArguments.args as IDataObject[];
-		const args: string[] = [];
-		const device = options.device as string;
 		const protocolTimeout = options.protocolTimeout as number;
-		let batchSize = options.batchSize as number;
 
-		if (!Number.isInteger(batchSize) || batchSize < 1) {
-			batchSize = 1;
-		}
+		let session = this.getWorkflowStaticData('global').puppeteerSession as PuppeteerSessionData | undefined;
 
-		// More on launch arguments: https://www.chromium.org/developers/how-tos/run-chromium-with-flags/
-		if (launchArgs && launchArgs.length > 0) {
-			args.push(...launchArgs.map((arg: IDataObject) => arg.arg as string));
-		}
-
-		const addContainerArgs = options.addContainerArgs === true;
-		if (addContainerArgs) {
-			const missingContainerArgs = CONTAINER_LAUNCH_ARGS.filter(arg => !args.some(
-				existingArg => existingArg === arg || existingArg.startsWith(`${arg}=`)
-			));
-
-			if (missingContainerArgs.length > 0) {
-				console.log('Puppeteer node: Adding container optimizations:', missingContainerArgs);
-				args.push(...missingContainerArgs);
-			} else {
-				console.log('Puppeteer node: Container optimizations already present in launch arguments');
-			}
-		}
-
-		// More on proxying: https://www.chromium.org/developers/design-documents/network-settings
-		if (options.proxyServer) {
-			args.push(`--proxy-server=${options.proxyServer}`);
-		}
-
-		if (stealth) {
-			puppeteer.use(pluginStealth());
-		}
-		if (humanTyping) {
-			puppeteer.use(pluginHumanTyping(humanTypingOptions));
-		}
-
-		if (headless && headlessShell) {
-			headless = 'shell';
+		if (!session && options.manualSessionOverride === true) {
+			const manualWsEndpoint = options.manualWsEndpoint as string;
+			const manualPageId = options.manualPageId as string;
+			if (!manualWsEndpoint || !manualPageId) throw new NodeOperationError(this.getNode(), 'For Manual Session Override, both WebSocket Endpoint and Page ID are required.');
+			session = { wsEndpoint: manualWsEndpoint, pageId: manualPageId, sessionId: 'manual-override', browserManagerUrl: '' };
 		}
 
 		let browser: Browser;
-		try {
-			if (browserWSEndpoint) {
-				browser = await puppeteer.connect({
-					browserWSEndpoint,
-					protocolTimeout,
-				});
-			} else {
+		// --- EXECUTION LOGIC: PERSISTENT vs TEMPORARY ---
+		if (session) {
+			// PERSISTENT BROWSER MODE
+			try {
+				browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint, protocolTimeout });
+				const pages = await browser.pages();
+				const page = pages.find(p => (p.target() as any)._targetId === session?.pageId);
+				if (!page) {
+					throw new NodeOperationError(this.getNode(), `Could not find persistent page with ID '${session.pageId}'. It may have been closed.`);
+				}
+
+				for (let i = 0; i < items.length; i++) {
+					try {
+						await handleOptions.call(this, page);
+						let results: INodeExecutionData[];
+						if (operation === 'runCustomScript') {
+							results = await runCustomScript.call(this, i, browser, page);
+						} else {
+							const urlString = this.getNodeParameter('url', i) as string;
+							const url = new URL(urlString);
+							results = await processPageOperation.call(this, operation, url, page, i);
+						}
+						// Attach session info to the output for chaining
+						results.forEach(res => res.json.puppeteerSession = { pageId: session?.pageId, sessionId: session?.sessionId });
+						returnData.push(...results);
+
+					} catch (error) {
+						returnData.push(await handleError.call(this, error as Error, i, undefined, undefined));
+					}
+				}
+			} catch (error) {
+				if (browser! && browser.isConnected()) await browser.disconnect();
+				throw new NodeOperationError(this.getNode(), error as Error, { description: 'Failed to execute action in persistent browser.' });
+			} finally {
+				if (browser! && browser.isConnected()) {
+					await browser.disconnect();
+				}
+			}
+		} else {
+			// TEMPORARY BROWSER MODE
+			const launchOptionsCollection = (options.launchOptions as IDataObject) || {};
+			let headless: 'shell' | boolean = launchOptionsCollection.headless !== false;
+			if (headless && launchOptionsCollection.shell === true) headless = 'shell';
+			if (options.stealth === true) puppeteer.use(pluginStealth());
+			if (options.humanTyping === true) puppeteer.use(pluginHumanTyping({ keyboardLayout: 'en', ...((options.humanTypingOptions as IDataObject) || {}) }));
+
+			const launchArgsConfig = (launchOptionsCollection.launchArguments as IDataObject) || {};
+			const launchArgsList: IDataObject[] = (launchArgsConfig.args as IDataObject[]) || [];
+			const args: string[] = launchArgsList.map((arg: IDataObject) => arg.arg as string);
+
+			if (launchOptionsCollection.addContainerArgs === true) {
+				const missing = CONTAINER_LAUNCH_ARGS.filter(arg => !args.includes(arg));
+				if(missing.length > 0) args.push(...missing);
+			}
+			if (options.proxyServer) args.push(`--proxy-server=${options.proxyServer}`);
+
+			try {
 				browser = await puppeteer.launch({
 					headless,
 					args,
-					executablePath,
+					executablePath: launchOptionsCollection.executablePath as string,
 					protocolTimeout,
 				});
-			}
-		} catch (error) {
-			throw new Error(`Failed to launch/connect to browser: ${(error as Error).message}`);
-		}
-
-		const processItem = async (
-			item: INodeExecutionData,
-			itemIndex: number,
-		): Promise<INodeExecutionData[]> => {
-			let page: Page | undefined;
-			try {
-				page = await browser.newPage();
-				await handleOptions.call(this, itemIndex, items, browser, page);
-
-				if (operation === 'runCustomScript') {
-					console.log(
-						`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '} Custom Script`,
-					);
-					return await runCustomScript.call(
-						this,
-						itemIndex,
-						items,
-						browser,
-						page,
-					);
-				}
-					const urlString = this.getNodeParameter('url', itemIndex) as string;
-					const queryParametersOptions = this.getNodeParameter(
-						'queryParameters',
-						itemIndex,
-						{},
-					) as IDataObject;
-
-					const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
-					let url: URL;
-
-					try {
-						url = new URL(urlString);
-						for (const queryParameter of queryParameters) {
-							url.searchParams.append(queryParameter.name, queryParameter.value);
-						}
-					} catch (error) {
-						return handleError.call(
-							this,
-							new Error(`Invalid URL: ${urlString}`),
-							itemIndex,
-							urlString,
-							page,
-						);
-					}
-
-					console.log(
-						`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '}${url}`,
-					);
-
-					return await processPageOperation.call(
-						this,
-						operation,
-						url,
-						page,
-						itemIndex,
-						options,
-					);
 			} catch (error) {
-				return handleError.call(
-					this,
-					error as Error,
-					itemIndex,
-					undefined,
-					page,
-				);
-			} finally {
-				if (page) {
-					try {
-						await page.close();
-					} catch (error) {
-						console.error('Error closing page:', error);
-					}
-				}
+				throw new NodeOperationError(this.getNode(), error as Error, { description: 'Failed to launch temporary browser.' });
 			}
-		};
 
-		try {
-			for (let i = 0; i < items.length; i += batchSize) {
-				const batch = items.slice(i, i + batchSize);
-				const results = await Promise.all(
-					batch.map((item, idx) => processItem(item, i + idx)),
-				);
-				if (results?.length) {
+			let batchSize = options.batchSize as number;
+			if (!Number.isInteger(batchSize) || batchSize < 1) batchSize = 1;
+
+			try {
+				for (let i = 0; i < items.length; i += batchSize) {
+					const batch = items.slice(i, i + batchSize);
+					const promises = batch.map(async (item, idx) => {
+						const itemIndex = i + idx;
+						let page: Page | undefined;
+						try {
+							page = await browser.newPage();
+							await handleOptions.call(this, page);
+
+							if (operation === 'runCustomScript') {
+								return await runCustomScript.call(this, itemIndex, browser, page);
+							} else {
+								const urlString = this.getNodeParameter('url', itemIndex) as string;
+								const queryParametersOptions = this.getNodeParameter('queryParameters', itemIndex, {}) as IDataObject;
+								const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
+								const url = new URL(urlString);
+								for (const queryParameter of queryParameters) {
+									url.searchParams.append(queryParameter.name, queryParameter.value);
+								}
+								return await processPageOperation.call(this, operation, url, page, itemIndex);
+							}
+						} catch (error) {
+							const url = operation !== 'runCustomScript' ? this.getNodeParameter('url', itemIndex) as string : undefined;
+							return await handleError.call(this, error as Error, itemIndex, url, page);
+						} finally {
+							if (page && !page.isClosed()) await page.close();
+						}
+					});
+					const results = await Promise.all(promises);
 					returnData.push(...results.flat());
 				}
-			}
-		} finally {
-			if (browser) {
-				try {
-					if (browserWSEndpoint) {
-						await browser.disconnect();
-					} else {
-						await browser.close();
-					}	
-				} catch (error) {
-					console.error('Error closing browser:', error);
-				}
+			} finally {
+				if (browser) await browser.close();
 			}
 		}
 
