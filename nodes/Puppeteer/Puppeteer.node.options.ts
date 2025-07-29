@@ -124,7 +124,7 @@ export const nodeDescription: INodeTypeDescription = {
 			displayOptions: { show: { operation: ['startPersistentBrowser'] } },
 		},
 		{
-			displayName: 'Note',
+			displayName: 'This node automatically uses the current persistent session started in the workflow. The options below are only needed for manual testing or if the Stop node is disconnected from the Start node.',
 			name: 'stopNote',
 			type: 'notice',
 			default: 'This node automatically uses the current persistent session started in the workflow. The options below are only needed for manual testing or if the Stop node is disconnected from the Start node.',
