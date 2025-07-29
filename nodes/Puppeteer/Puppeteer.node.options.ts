@@ -72,7 +72,18 @@ export const nodeDescription: INodeTypeDescription = {
 			displayName: 'Operation',
 			name: 'operation',
 			type: 'options',
+			noDataExpression: true,
 			options: [
+				{
+					name: 'Start Persistent Browser',
+					value: 'startPersistentBrowser',
+					description: 'Starts a new persistent browser session',
+				},
+				{
+					name: 'Stop Persistent Browser',
+					value: 'stopPersistentBrowser',
+					description: 'Stops the current persistent browser session',
+				},
 				{
 					name: 'Get Page Content',
 					value: 'getPageContent',
@@ -95,6 +106,45 @@ export const nodeDescription: INodeTypeDescription = {
 				},
 			],
 			default: 'getPageContent',
+		},
+		{
+			displayName: 'Session ID',
+			name: 'sessionId',
+			type: 'string',
+			default: 'n8n-session-{{ $execution.id }}',
+			description: 'A unique ID for the browser session. Re-using an ID will reconnect to an existing session.',
+			displayOptions: { show: { operation: ['startPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Browser Manager URL',
+			name: 'browserManagerUrl',
+			type: 'string',
+			default: 'http://127.0.0.1:3001',
+			description: 'The base URL of your browser manager service. Use 127.0.0.1 instead of localhost.',
+			displayOptions: { show: { operation: ['startPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Note',
+			name: 'stopNote',
+			type: 'notice',
+			default: 'This node automatically uses the current persistent session started in the workflow. The options below are only needed for manual testing or if the Stop node is disconnected from the Start node.',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Session ID (Fallback)',
+			name: 'stopSessionId',
+			type: 'string',
+			default: '',
+			description: 'Only required if this node cannot find an active session from a "Start" node in this workflow',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
+		},
+		{
+			displayName: 'Browser Manager URL (Fallback)',
+			name: 'stopBrowserManagerUrl',
+			type: 'string',
+			default: 'http://127.0.0.1:3001',
+			description: 'Only required if this node cannot find an active session from a "Start" node in this workflow',
+			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
 		},
 		{
 			displayName: 'Script Code',
@@ -529,6 +579,11 @@ export const nodeDescription: INodeTypeDescription = {
 			type: 'collection',
 			placeholder: 'Add Option',
 			default: {},
+			displayOptions: {
+				show: {
+					operation: ['getPageContent', 'getScreenshot', 'getPDF', 'runCustomScript'],
+				},
+			},
 			options: [
 				{
 					displayName: 'Batch Size',
