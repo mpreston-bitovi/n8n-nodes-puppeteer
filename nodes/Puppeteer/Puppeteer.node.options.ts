@@ -3,13 +3,10 @@ import { existsSync, readFileSync } from 'node:fs';
 
 function isRunningInContainer(): boolean {
 	try {
-		// Method 1: Check for .dockerenv file
 		if (existsSync('/.dockerenv')) {
 			console.log('Puppeteer node: Container detected via .dockerenv file');
 			return true;
 		}
-
-		// Method 2: Check cgroup (Linux only)
 		if (process.platform === 'linux') {
 			try {
 				const cgroupContent = readFileSync('/proc/1/cgroup', 'utf8');
@@ -21,18 +18,14 @@ function isRunningInContainer(): boolean {
 				console.log('Puppeteer node: cgroup check skipped');
 			}
 		}
-
-		// Method 3: Check common container environment variables
 		if (process.env.KUBERNETES_SERVICE_HOST ||
 			process.env.DOCKER_CONTAINER ||
 			process.env.DOCKER_HOST) {
 			console.log('Puppeteer node: Container detected via environment variables');
 			return true;
 		}
-
 		return false;
 	} catch (error) {
-		// If any error occurs during checks, log and return false
 		console.log('Puppeteer node: Container detection failed:', (error as Error).message);
 		return false;
 	}
@@ -72,8 +65,9 @@ export const nodeDescription: INodeTypeDescription = {
 			displayName: 'Operation',
 			name: 'operation',
 			type: 'options',
-			noDataExpression: true,
+			noDataExpression: true, // ADDED: This is a necessary small change for the new options
 			options: [
+				// ADDED: New Operations
 				{
 					name: 'Start Persistent Browser',
 					value: 'startPersistentBrowser',
@@ -84,6 +78,7 @@ export const nodeDescription: INodeTypeDescription = {
 					value: 'stopPersistentBrowser',
 					description: 'Stops the current persistent browser session',
 				},
+				// ORIGINAL: Operations
 				{
 					name: 'Get Page Content',
 					value: 'getPageContent',
@@ -107,6 +102,7 @@ export const nodeDescription: INodeTypeDescription = {
 			],
 			default: 'getPageContent',
 		},
+		// ADDED: New properties for session management
 		{
 			displayName: 'Session ID',
 			name: 'sessionId',
@@ -146,6 +142,7 @@ export const nodeDescription: INodeTypeDescription = {
 			description: 'Only required if this node cannot find an active session from a "Start" node in this workflow',
 			displayOptions: { show: { operation: ['stopPersistentBrowser'] } },
 		},
+		// --- All original properties below are untouched ---
 		{
 			displayName: 'Script Code',
 			name: 'scriptCode',
@@ -243,62 +240,17 @@ export const nodeDescription: INodeTypeDescription = {
 			name: 'format',
 			type: 'options',
 			options: [
-				{
-					name: 'Letter',
-					value: 'Letter',
-					description: '8.5in x 11in',
-				},
-				{
-					name: 'Legal',
-					value: 'Legal',
-					description: '8.5in x 14in',
-				},
-				{
-					name: 'Tabloid',
-					value: 'Tabloid',
-					description: '11in x 17in',
-				},
-				{
-					name: 'Ledger',
-					value: 'Ledger',
-					description: '17in x 11in',
-				},
-				{
-					name: 'A0',
-
-					value: 'A0',
-					description: '33.1in x 46.8in',
-				},
-				{
-					name: 'A1',
-					value: 'A1',
-					description: '23.4in x 33.1in',
-				},
-				{
-					name: 'A2',
-					value: 'A2',
-					description: '16.54in x 23.4in',
-				},
-				{
-					name: 'A3',
-					value: 'A3',
-					description: '11.7in x 16.54in',
-				},
-				{
-					name: 'A4',
-					value: 'A4',
-					description: '8.27in x 11.7in',
-				},
-				{
-					name: 'A5',
-					value: 'A5',
-					description: '5.83in x 8.27in',
-				},
-				{
-					name: 'A6',
-					value: 'A6',
-					description: '4.13in x 5.83in',
-				},
+				{ name: 'Letter', value: 'Letter', description: '8.5in x 11in', },
+				{ name: 'Legal', value: 'Legal', description: '8.5in x 14in', },
+				{ name: 'Tabloid', value: 'Tabloid', description: '11in x 17in', },
+				{ name: 'Ledger', value: 'Ledger', description: '17in x 11in', },
+				{ name: 'A0', value: 'A0', description: '33.1in x 46.8in', },
+				{ name: 'A1', value: 'A1', description: '23.4in x 33.1in', },
+				{ name: 'A2', value: 'A2', description: '16.54in x 23.4in', },
+				{ name: 'A3', value: 'A3', description: '11.7in x 16.54in', },
+				{ name: 'A4', value: 'A4', description: '8.27in x 11.7in', },
+				{ name: 'A5', value: 'A5', description: '5.83in x 8.27in', },
+				{ name: 'A6', value: 'A6', description: '4.13in x 5.83in', },
 			],
 			default: 'Letter',
 			description:
@@ -366,34 +318,10 @@ export const nodeDescription: INodeTypeDescription = {
 				},
 			},
 			options: [
-				{
-					displayName: 'Top',
-					name: 'top',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Bottom',
-					name: 'bottom',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Left',
-					name: 'left',
-					type: 'string',
-					default: '',
-					required: false,
-				},
-				{
-					displayName: 'Right',
-					name: 'right',
-					type: 'string',
-					default: '',
-					required: false,
-				},
+				{ displayName: 'Top', name: 'top', type: 'string', default: '', required: false, },
+				{ displayName: 'Bottom', name: 'bottom', type: 'string', default: '', required: false, },
+				{ displayName: 'Left', name: 'left', type: 'string', default: '', required: false, },
+				{ displayName: 'Right', name: 'right', type: 'string', default: '', required: false, },
 			],
 		},
 		{
@@ -412,20 +340,10 @@ export const nodeDescription: INodeTypeDescription = {
 		{
 			displayName: 'Header Template',
 			name: 'headerTemplate',
-			typeOptions: {
-				rows: 5,
-			},
+			typeOptions: { rows: 5, },
 			type: 'string',
 			default: "",
-			description: `HTML template for the print header. Should be valid HTML with the following classes used to inject values into them: - date formatted print date
-
-            - title document title
-
-            - url document location
-
-            - pageNumber current page number
-
-            - totalPages total pages in the document`,
+			description: `HTML template for the print header. Should be valid HTML with the following classes used to inject values into them: - date formatted print date\n\n            - title document title\n\n            - url document location\n\n            - pageNumber current page number\n\n            - totalPages total pages in the document`,
 			noDataExpression: true,
 			displayOptions: {
 				show: {
@@ -437,9 +355,7 @@ export const nodeDescription: INodeTypeDescription = {
 		{
 			displayName: 'Footer Template',
 			name: 'footerTemplate',
-			typeOptions: {
-				rows: 5,
-			},
+			typeOptions: { rows: 5, },
 			type: 'string',
 			default: "",
 			description: "HTML template for the print footer. Should be valid HTML with the following classes used to inject values into them: - date formatted print date",
@@ -482,20 +398,7 @@ export const nodeDescription: INodeTypeDescription = {
 			displayName: 'Type',
 			name: 'imageType',
 			type: 'options',
-			options: [
-				{
-					name: 'JPEG',
-					value: 'jpeg',
-				},
-				{
-					name: 'PNG',
-					value: 'png',
-				},
-				{
-					name: 'WebP',
-					value: 'webp',
-				},
-			],
+			options: [ { name: 'JPEG', value: 'jpeg', }, { name: 'PNG', value: 'png', }, { name: 'WebP', value: 'webp', }, ],
 			displayOptions: {
 				show: {
 					operation: ['getScreenshot'],
@@ -508,10 +411,7 @@ export const nodeDescription: INodeTypeDescription = {
 			displayName: 'Quality',
 			name: 'quality',
 			type: 'number',
-			typeOptions: {
-				minValue: 0,
-				maxValue: 100,
-			},
+			typeOptions: { minValue: 0, maxValue: 100, },
 			default: 100,
 			displayOptions: {
 				show: {
@@ -540,9 +440,7 @@ export const nodeDescription: INodeTypeDescription = {
 			name: 'queryParameters',
 			placeholder: 'Add Parameter',
 			type: 'fixedCollection',
-			typeOptions: {
-				multipleValues: true,
-			},
+			typeOptions: { multipleValues: true, },
 			displayOptions: {
 				show: {
 					operation: ['getPageContent', 'getScreenshot', 'getPDF'],
@@ -555,20 +453,8 @@ export const nodeDescription: INodeTypeDescription = {
 					name: 'parameters',
 					displayName: 'Parameters',
 					values: [
-						{
-							displayName: 'Name',
-							name: 'name',
-							type: 'string',
-							default: '',
-							description: 'Name of the parameter.',
-						},
-						{
-							displayName: 'Value',
-							name: 'value',
-							type: 'string',
-							default: '',
-							description: 'Value of the parameter.',
-						},
+						{ displayName: 'Name', name: 'name', type: 'string', default: '', description: 'Name of the parameter.', },
+						{ displayName: 'Value', name: 'value', type: 'string', default: '', description: 'Value of the parameter.', },
 					],
 				},
 			],
@@ -579,22 +465,46 @@ export const nodeDescription: INodeTypeDescription = {
 			type: 'collection',
 			placeholder: 'Add Option',
 			default: {},
+			// ADDED: This display option hides the entire options block for session management ops
 			displayOptions: {
 				show: {
 					operation: ['getPageContent', 'getScreenshot', 'getPDF', 'runCustomScript'],
 				},
 			},
 			options: [
+				// RESTORED: All original options, including manual override, are preserved here
+				{
+					displayName: 'Manual Session Override',
+					name: 'manualSessionOverride',
+					type: 'boolean',
+					default: false,
+					description: 'Enable to manually provide connection details for an existing persistent session. This is useful for debugging individual nodes.',
+				},
+				{
+					displayName: 'Browser WebSocket Endpoint',
+					name: 'manualWsEndpoint',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'The WebSocket URL of an existing browser session',
+					displayOptions: { show: { manualSessionOverride: [true] } },
+				},
+				{
+					displayName: 'Page ID',
+					name: 'manualPageId',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'The ID of the specific page to attach to in the existing session',
+					displayOptions: { show: { manualSessionOverride: [true] } },
+				},
 				{
 					displayName: 'Batch Size',
 					name: 'batchSize',
 					type: 'number',
-					typeOptions: {
-						minValue: 1,
-					},
+					typeOptions: { minValue: 1, },
 					default: 1,
-					description:
-						'Maximum number of pages to open simultaneously. More pages will consume more memory and CPU.',
+					description: 'Maximum number of pages to open simultaneously. More pages will consume more memory and CPU.',
 				},
 				{
 					displayName: 'Browser WebSocket Endpoint',
@@ -610,9 +520,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'options',
 					description: 'Emulate a specific device.',
 					default: '',
-					typeOptions: {
-						loadOptionsMethod: 'getDevices',
-					},
+					typeOptions: { loadOptionsMethod: 'getDevices', },
 					required: false,
 				},
 				{
@@ -621,41 +529,17 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'string',
 					required: false,
 					default: '',
-					description:
-						'A path where Puppeteer expects to find the bundled browser. Has no effect when \'Browser WebSocket Endpoint\' is set.',
+					description: 'A path where Puppeteer expects to find the bundled browser. Has no effect when \'Browser WebSocket Endpoint\' is set.',
 				},
 				{
 					displayName: 'Extra Headers',
 					name: 'headers',
 					placeholder: 'Add Header',
 					type: 'fixedCollection',
-					typeOptions: {
-						multipleValues: true,
-					},
+					typeOptions: { multipleValues: true, },
 					description: 'The headers to send.',
 					default: {},
-					options: [
-						{
-							name: 'parameter',
-							displayName: 'Header',
-							values: [
-								{
-									displayName: 'Name',
-									name: 'name',
-									type: 'string',
-									default: '',
-									description: 'Name of the header.',
-								},
-								{
-									displayName: 'Value',
-									name: 'value',
-									type: 'string',
-									default: '',
-									description: 'Value to set for the header.',
-								},
-							],
-						},
-					],
+					options: [ { name: 'parameter', displayName: 'Header', values: [ { displayName: 'Name', name: 'name', type: 'string', default: '', description: 'Name of the header.', }, { displayName: 'Value', name: 'value', type: 'string', default: '', description: 'Value to set for the header.', }, ], }, ],
 				},
 				{
 					displayName: 'File Name',
@@ -669,76 +553,36 @@ export const nodeDescription: INodeTypeDescription = {
 					name: 'launchArguments',
 					placeholder: 'Add Argument',
 					type: 'fixedCollection',
-					typeOptions: {
-						multipleValues: true,
-					},
-					description:
-						'Additional command line arguments to pass to the browser instance. Has no effect when \'Browser WebSocket Endpoint\' is set.',
+					typeOptions: { multipleValues: true, },
+					description: 'Additional command line arguments to pass to the browser instance. Has no effect when \'Browser WebSocket Endpoint\' is set.',
 					default: {},
-					options: [
-						{
-							name: 'args',
-							displayName: '',
-							values: [
-								{
-									displayName: 'Argument',
-									name: 'arg',
-									type: 'string',
-									default: '',
-									description:
-										'The command line argument to pass to the browser instance.',
-								},
-							],
-						},
-					],
+					options: [ { name: 'args', displayName: '', values: [ { displayName: 'Argument', name: 'arg', type: 'string', default: '', description: 'The command line argument to pass to the browser instance.', }, ], }, ],
 				},
 				{
 					displayName: 'Timeout',
 					name: 'timeout',
 					type: 'number',
-					typeOptions: {
-						minValue: 0,
-					},
+					typeOptions: { minValue: 0, },
 					default: 30000,
-					description:
-						'Maximum navigation time in milliseconds. Pass 0 to disable timeout. Has no effect on the \'Run Custom Script\' operation.',
+					description: 'Maximum navigation time in milliseconds. Pass 0 to disable timeout. Has no effect on the \'Run Custom Script\' operation.',
 				},
 				{
 					displayName: 'Protocol Timeout',
 					name: 'protocolTimeout',
 					type: 'number',
-					typeOptions: {
-						minValue: 0,
-					},
+					typeOptions: { minValue: 0, },
 					default: 30000,
-					description:
-						'Maximum time in milliseconds to wait for a protocol response. Pass 0 to disable timeout.',
+					description: 'Maximum time in milliseconds to wait for a protocol response. Pass 0 to disable timeout.',
 				},
 				{
 					displayName: 'Wait Until',
 					name: 'waitUntil',
 					type: 'options',
 					options: [
-						{
-							name: 'load',
-							value: 'load',
-							description: 'The load event is fired',
-						},
-						{
-							name: 'domcontentloaded',
-							value: 'domcontentloaded',
-							description: 'The domcontentloaded event is fired',
-						},
-						{
-							name: 'networkidle0',
-							value: 'networkidle0',
-							description: 'No more than 0 connections for at least 500 ms',
-						},
-						{
-							name: 'networkidle2',
-							value: 'networkidle2',
-							description: 'No more than 2 connections for at least 500 ms',
-						},
+						{ name: 'load', value: 'load', description: 'The load event is fired', },
+						{ name: 'domcontentloaded', value: 'domcontentloaded', description: 'The domcontentloaded event is fired', },
+						{ name: 'networkidle0', value: 'networkidle0', description: 'No more than 0 connections for at least 500 ms', },
+						{ name: 'networkidle2', value: 'networkidle2', description: 'No more than 2 connections for at least 500 ms', },
 					],
 					default: 'load',
 					description: 'When to consider navigation succeeded. Has no effect on the \'Run Custom Script\' operation.',
@@ -749,8 +593,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: true,
-					description:
-						'Whether to enable page level caching. Defaults to true.',
+					description: 'Whether to enable page level caching. Defaults to true.',
 				},
 				{
 					displayName: 'Headless mode',
@@ -758,8 +601,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: true,
-					description:
-						'Whether to run browser in headless mode. Defaults to true.',
+					description: 'Whether to run browser in headless mode. Defaults to true.',
 				},
 				{
 					displayName: 'Use Chrome Headless Shell',
@@ -767,8 +609,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: false,
-					description:
-						'Whether to run browser in headless shell mode. Defaults to false. Headless mode must be enabled. chrome-headless-shell must be in $PATH.',
+					description: 'Whether to run browser in headless shell mode. Defaults to false. Headless mode must be enabled. chrome-headless-shell must be in $PATH.',
 				},
 				{
 					displayName: 'Stealth mode',
@@ -776,8 +617,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: false,
-					description:
-						'When enabled, applies various techniques to make detection of headless Puppeteer harder.',
+					description: 'When enabled, applies various techniques to make detection of headless Puppeteer harder.',
 				},
 				{
 					displayName: 'Human typing mode',
@@ -785,8 +625,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'boolean',
 					required: false,
 					default: false,
-					description:
-						'Gives page the function .typeHuman() which "humanizes" the writing of input elements',
+					description: 'Gives page the function .typeHuman() which "humanizes" the writing of input elements',
 				},
 				{
 					displayName: 'Human Typing Options',
@@ -800,54 +639,12 @@ export const nodeDescription: INodeTypeDescription = {
 						},
 					},
 					options: [
-						{
-							displayName: 'Backspace Maximum Delay (ms)',
-							name: 'backspaceMaximumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 750 * 2,
-							description: 'Maximum delay for simulating backspaces in milliseconds',
-						},
-						{
-							displayName: 'Backspace Minimum Delay (ms)',
-							name: 'backspaceMinimumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 750,
-							description: 'Minimum delay for simulating backspaces in milliseconds',
-						},
-						{
-							displayName: 'Maximum Delay (ms)',
-							name: 'maximumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 650,
-							description: 'Maximum delay between keystrokes in milliseconds',
-						},
-						{
-							displayName: 'Minimum Delay (ms)',
-							name: 'minimumDelayInMs',
-							type: 'number',
-							required: false,
-							default: 150,
-							description: 'Minimum delay between keystrokes in milliseconds',
-						},
-						{
-							displayName: 'Chance to Keep a Typo (%)',
-							name: 'chanceToKeepATypoInPercent',
-							type: 'number',
-							required: false,
-							default: 0,
-							description: 'Percentage chance to keep a typo',
-						},
-						{
-							displayName: 'Typo Chance (%)',
-							name: 'typoChanceInPercent',
-							type: 'number',
-							required: false,
-							default: 15,
-							description: 'Percentage chance to make a typo',
-						},
+						{ displayName: 'Backspace Maximum Delay (ms)', name: 'backspaceMaximumDelayInMs', type: 'number', required: false, default: 750 * 2, description: 'Maximum delay for simulating backspaces in milliseconds', },
+						{ displayName: 'Backspace Minimum Delay (ms)', name: 'backspaceMinimumDelayInMs', type: 'number', required: false, default: 750, description: 'Minimum delay for simulating backspaces in milliseconds', },
+						{ displayName: 'Maximum Delay (ms)', name: 'maximumDelayInMs', type: 'number', required: false, default: 650, description: 'Maximum delay between keystrokes in milliseconds', },
+						{ displayName: 'Minimum Delay (ms)', name: 'minimumDelayInMs', type: 'number', required: false, default: 150, description: 'Minimum delay between keystrokes in milliseconds', },
+						{ displayName: 'Chance to Keep a Typo (%)', name: 'chanceToKeepATypoInPercent', type: 'number', required: false, default: 0, description: 'Percentage chance to keep a typo', },
+						{ displayName: 'Typo Chance (%)', name: 'typoChanceInPercent', type: 'number', required: false, default: 15, description: 'Percentage chance to make a typo', },
 					],
 				},
 				{
@@ -856,8 +653,7 @@ export const nodeDescription: INodeTypeDescription = {
 					type: 'string',
 					required: false,
 					default: '',
-					description:
-						'This tells Puppeteer to use a custom proxy configuration. Examples: localhost:8080, socks5://localhost:1080, etc.',
+					description: 'This tells Puppeteer to use a custom proxy configuration. Examples: localhost:8080, socks5://localhost:1080, etc.',
 				},
 				{
 					displayName: 'Add Container Arguments',
