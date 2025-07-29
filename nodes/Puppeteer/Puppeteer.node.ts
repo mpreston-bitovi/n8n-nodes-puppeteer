@@ -1,3 +1,4 @@
+// FINAL CORRECTED VERSION - MINIMAL CHANGES
 import {
 	type IDataObject,
 	type IExecuteFunctions,
@@ -59,6 +60,7 @@ interface QueryParameter {
 	value: string;
 }
 
+// RESTORED: This interface was missing in the intermediate version
 interface PuppeteerSessionData {
 	wsEndpoint: string;
 	pageId: string;
@@ -89,7 +91,7 @@ async function handleError(
 	this: IExecuteFunctions,
 	error: Error,
 	itemIndex: number,
-	isPersistent: boolean = false, // ADDED: New parameter to control page closing
+	isPersistent: boolean, // ADDED: New parameter to control page closing
 	url?: string,
 	page?: Page,
 ): Promise<INodeExecutionData[]> {
@@ -104,26 +106,20 @@ async function handleError(
 
 	if (this.continueOnFail()) {
 		const nodeOperationError = new NodeOperationError(this.getNode(), error.message);
-
 		const errorResponse: ErrorResponse = {
-			json: {
-				error: error.message,
-			},
-			pairedItem: {
-				item: itemIndex,
-			},
+			json: { error: error.message, },
+			pairedItem: { item: itemIndex, },
 			error: nodeOperationError,
 		};
-
 		if (url) {
 			errorResponse.json.url = url;
 		}
-
 		return [errorResponse];
 	}
 
 	throw new NodeOperationError(this.getNode(), error.message);
 }
+
 
 async function handleOptions(
 	this: IExecuteFunctions,
@@ -160,14 +156,13 @@ async function handleOptions(
 	await page.setExtraHTTPHeaders(requestHeaders);
 }
 
-// MODIFIED: This function now throws errors instead of handling them,
-// allowing the mode-aware caller to catch them correctly.
 async function runCustomScript(
 	this: IExecuteFunctions,
 	itemIndex: number,
 	items: INodeExecutionData[],
 	browser: Browser,
 	page: Page,
+	isPersistent: boolean,
 ): Promise<INodeExecutionData[]> {
 	const scriptCode = this.getNodeParameter('scriptCode', itemIndex) as string;
 	const context = {
@@ -200,15 +195,28 @@ async function runCustomScript(
 				: () => {},
 	);
 
-	const scriptResult = await vm.run(
-		`module.exports = async function() { ${scriptCode}\n}()`,
-	);
+	try {
+		const scriptResult = await vm.run(
+			`module.exports = async function() { ${scriptCode}\n}()`,
+		);
 
-	if (!Array.isArray(scriptResult)) {
-		throw new Error('Custom script must return an array of items. Please ensure your script returns an array, e.g., return [{ key: value }].');
+		if (!Array.isArray(scriptResult)) {
+			// Pass isPersistent flag to the error handler
+			return handleError.call(
+				this,
+				new Error('Custom script must return an array of items. Please ensure your script returns an array, e.g., return [{ key: value }].'),
+				itemIndex,
+				isPersistent, // Pass flag
+				undefined,
+				page,
+			);
+		}
+
+		return this.helpers.normalizeItems(scriptResult);
+	} catch (error) {
+		// Pass isPersistent flag to the error handler
+		return handleError.call(this, error as Error, itemIndex, isPersistent, undefined, page);
 	}
-
-	return this.helpers.normalizeItems(scriptResult);
 }
 
 async function processPageOperation(
@@ -218,104 +226,96 @@ async function processPageOperation(
 	page: Page,
 	itemIndex: number,
 	options: IDataObject,
+	isPersistent: boolean,
 ): Promise<INodeExecutionData[]> {
 	const waitUntil = options.waitUntil as PuppeteerLifeCycleEvent;
 	const timeout = options.timeout as number;
 
-	const response = await page.goto(url.toString(), {
-		waitUntil,
-		timeout,
-	});
+	try {
+		const response = await page.goto(url.toString(), {
+			waitUntil,
+			timeout,
+		});
 
-	const headers = await response?.headers();
-	const statusCode = response?.status();
+		const headers = await response?.headers();
+		const statusCode = response?.status();
 
-	if (!response || (statusCode && statusCode >= 400)) {
-		throw new Error(`Request failed with status code ${statusCode || 0}`);
-	}
-
-	if (operation === 'getPageContent') {
-		const body = await page.content();
-		return [{
-			json: {
-				body,
-				headers,
-				statusCode,
-				url: url.toString(),
-			},
-			pairedItem: {
-				item: itemIndex,
-			},
-		}];
-	}
-
-	if (operation === 'getScreenshot') {
-		const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
-		const fileName = options.fileName as string;
-		const type = this.getNodeParameter('imageType', itemIndex) as ScreenshotOptions['type'];
-		const fullPage = this.getNodeParameter('fullPage', itemIndex) as boolean;
-		const screenshotOptions: ScreenshotOptions = { type, fullPage };
-
-		if (type !== 'png') {
-			screenshotOptions.quality = this.getNodeParameter('quality', itemIndex) as number;
+		if (!response || (statusCode && statusCode >= 400)) {
+			// Pass isPersistent flag to the error handler
+			return handleError.call(this, new Error(`Request failed with status code ${statusCode || 0}`), itemIndex, isPersistent, url.toString(), page);
 		}
-		if (fileName) { // @ts-ignore
-			screenshotOptions.path = fileName;
+
+		if (operation === 'getPageContent') {
+			const body = await page.content();
+			return [{
+				json: { body, headers, statusCode, url: url.toString(), },
+				pairedItem: { item: itemIndex, },
+			}];
 		}
-		const screenshot = await page.screenshot(screenshotOptions);
-		if (screenshot) {
+
+		if (operation === 'getScreenshot') {
+			const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
+			const fileName = options.fileName as string;
+			const type = this.getNodeParameter('imageType', itemIndex) as ScreenshotOptions['type'];
+			const fullPage = this.getNodeParameter('fullPage', itemIndex) as boolean;
+			const screenshotOptions: ScreenshotOptions = { type, fullPage, };
+
+			if (type !== 'png') {
+				screenshotOptions.quality = this.getNodeParameter('quality', itemIndex) as number;
+			}
+			if (fileName) { // @ts-ignore
+				screenshotOptions.path = fileName;
+			}
+			const screenshot = await page.screenshot(screenshotOptions);
 			const binaryData = await this.helpers.prepareBinaryData(Buffer.from(screenshot), screenshotOptions.path, `image/${type}`);
 			return [{
 				binary: { [dataPropertyName]: binaryData },
-				json: { headers, statusCode, url: url.toString() },
-				pairedItem: { item: itemIndex },
+				json: { headers, statusCode, url: url.toString(), },
+				pairedItem: { item: itemIndex, },
 			}];
 		}
-	}
 
-	if (operation === 'getPDF') {
-		const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
-		const pageRanges = this.getNodeParameter('pageRanges', itemIndex) as string;
-		const displayHeaderFooter = this.getNodeParameter('displayHeaderFooter', itemIndex) as boolean;
-		const omitBackground = this.getNodeParameter('omitBackground', itemIndex) as boolean;
-		const printBackground = this.getNodeParameter('printBackground', itemIndex) as boolean;
-		const landscape = this.getNodeParameter('landscape', itemIndex) as boolean;
-		const preferCSSPageSize = this.getNodeParameter('preferCSSPageSize', itemIndex) as boolean;
-		const scale = this.getNodeParameter('scale', itemIndex) as number;
-		const margin = this.getNodeParameter('margin', 0, {}) as IDataObject;
-
-		let headerTemplate = '', footerTemplate = '', height = '', width = '', format: PaperFormat = 'A4';
-
-		if (displayHeaderFooter) {
-			headerTemplate = this.getNodeParameter('headerTemplate', itemIndex) as string;
-			footerTemplate = this.getNodeParameter('footerTemplate', itemIndex) as string;
-		}
-		if (!preferCSSPageSize) {
-			height = this.getNodeParameter('height', itemIndex) as string;
-			width = this.getNodeParameter('width', itemIndex) as string;
-			if (!height || !width) {
-				format = this.getNodeParameter('format', itemIndex) as PaperFormat;
+		if (operation === 'getPDF') {
+			const dataPropertyName = this.getNodeParameter('dataPropertyName', itemIndex) as string;
+			const pageRanges = this.getNodeParameter('pageRanges', itemIndex) as string;
+			const displayHeaderFooter = this.getNodeParameter('displayHeaderFooter', itemIndex) as boolean;
+			const omitBackground = this.getNodeParameter('omitBackground', itemIndex) as boolean;
+			const printBackground = this.getNodeParameter('printBackground', itemIndex) as boolean;
+			const landscape = this.getNodeParameter('landscape', itemIndex) as boolean;
+			const preferCSSPageSize = this.getNodeParameter('preferCSSPageSize', itemIndex) as boolean;
+			const scale = this.getNodeParameter('scale', itemIndex) as number;
+			const margin = this.getNodeParameter('margin', 0, {}) as IDataObject;
+			let headerTemplate = '', footerTemplate = '', height = '', width = '', format: PaperFormat = 'A4';
+			if (displayHeaderFooter) {
+				headerTemplate = this.getNodeParameter('headerTemplate', itemIndex) as string;
+				footerTemplate = this.getNodeParameter('footerTemplate', itemIndex) as string;
 			}
-		}
-
-		const pdfOptions: PDFOptions = {
-			format, displayHeaderFooter, omitBackground, printBackground, landscape, headerTemplate,
-			footerTemplate, preferCSSPageSize, scale, height, width, pageRanges, margin,
-		};
-		if (options.fileName) pdfOptions.path = options.fileName as string;
-
-		const pdf = await page.pdf(pdfOptions);
-		if (pdf) {
+			if (!preferCSSPageSize) {
+				height = this.getNodeParameter('height', itemIndex) as string;
+				width = this.getNodeParameter('width', itemIndex) as string;
+				if (!height || !width) {
+					format = this.getNodeParameter('format', itemIndex) as PaperFormat;
+				}
+			}
+			const pdfOptions: PDFOptions = {
+				format, displayHeaderFooter, omitBackground, printBackground, landscape, headerTemplate,
+				footerTemplate, preferCSSPageSize, scale, height, width, pageRanges, margin,
+			};
+			if (options.fileName) pdfOptions.path = options.fileName as string;
+			const pdf = await page.pdf(pdfOptions);
 			const binaryData = await this.helpers.prepareBinaryData(Buffer.from(pdf), pdfOptions.path, 'application/pdf');
 			return [{
 				binary: { [dataPropertyName]: binaryData },
-				json: { headers, statusCode, url: url.toString() },
-				pairedItem: { item: itemIndex },
+				json: { headers, statusCode, url: url.toString(), },
+				pairedItem: { item: itemIndex, },
 			}];
 		}
+		// Pass isPersistent flag to the error handler
+		return handleError.call(this, new Error(`Unsupported operation: ${operation}`), itemIndex, isPersistent, url.toString(), page);
+	} catch (error) {
+		// Pass isPersistent flag to the error handler
+		return handleError.call(this, error as Error, itemIndex, isPersistent, url.toString(), page);
 	}
-
-	throw new Error(`Unsupported operation: ${operation}`);
 }
 
 export class Puppeteer implements INodeType {
@@ -323,12 +323,9 @@ export class Puppeteer implements INodeType {
 
 	methods = {
 		loadOptions: {
-			async getDevices(
-				this: ILoadOptionsFunctions,
-			): Promise<INodePropertyOptions[]> {
+			async getDevices(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const deviceNames = Object.keys(devices);
 				const returnData: INodePropertyOptions[] = [];
-
 				for (const name of deviceNames) {
 					const device = devices[name as keyof typeof devices] as Device;
 					returnData.push({
@@ -337,7 +334,6 @@ export class Puppeteer implements INodeType {
 						description: `${device.viewport.width} x ${device.viewport.height} @ ${device.viewport.deviceScaleFactor}x`,
 					});
 				}
-
 				return returnData;
 			},
 		},
@@ -392,53 +388,63 @@ export class Puppeteer implements INodeType {
 			}
 		}
 
+		// ***** CHANGE 2 of 2: UPDATED execute logic to be mode-aware *****
+
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 		const options = this.getNodeParameter('options', 0, {}) as IDataObject;
-		const session = this.getWorkflowStaticData('global').puppeteerSession as PuppeteerSessionData | undefined;
+		let session = this.getWorkflowStaticData('global').puppeteerSession as PuppeteerSessionData | undefined;
+		let isPersistent = true; // Assume persistent if a session exists
+		let isManualSession = false;
+
+		// RESTORED: Manual session override logic
+		if (!session && options.manualSessionOverride === true) {
+			isManualSession = true;
+			const manualWsEndpoint = options.manualWsEndpoint as string;
+			const manualPageId = options.manualPageId as string;
+			if(!manualWsEndpoint || !manualPageId) throw new NodeOperationError(this.getNode(), 'For Manual Session Override, both WebSocket Endpoint and Page ID are required.');
+			session = { wsEndpoint: manualWsEndpoint, pageId: manualPageId, sessionId: 'manual-override', browserManagerUrl: '' };
+		}
+
 
 		if (session) {
 			// PERSISTENT MODE
 			const protocolTimeout = options.protocolTimeout as number;
-			let browser: Browser | undefined;
+			let browser: Browser;
 			try {
 				browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint, protocolTimeout });
 				const page = (await browser.pages()).find(p => (p.target() as any)._targetId === session.pageId);
 
 				if (!page) {
-					throw new NodeOperationError(this.getNode(), `Could not find persistent page with ID '${session.pageId}'. It may have been closed or the session may have expired.`);
+					throw new NodeOperationError(this.getNode(), `Could not find persistent page with ID '${session.pageId}'.`);
 				}
 
 				for (let i = 0; i < items.length; i++) {
 					try {
 						await handleOptions.call(this, i, items, browser, page);
-
 						if (operation === 'runCustomScript') {
-							const result = await runCustomScript.call(this, i, items, browser, page);
-							returnData.push(...result);
+							returnData.push(...await runCustomScript.call(this, i, items, browser, page, isPersistent));
 						} else {
 							const urlString = this.getNodeParameter('url', i) as string;
 							const url = new URL(urlString);
-							const result = await processPageOperation.call(this, operation, url, page, i, options);
-							returnData.push(...result);
+							returnData.push(...await processPageOperation.call(this, operation, url, page, i, options, isPersistent));
 						}
 					} catch (error) {
-						// MODIFIED: Call handleError with `isPersistent: true` to prevent closing the page.
-						const errorResult = await handleError.call(this, error as Error, i, true, undefined, page);
-						returnData.push(...errorResult);
+						// The helpers will call handleError correctly now, this is a fallback for other errors.
+						returnData.push(...await handleError.call(this, error as Error, i, isPersistent, undefined, page));
 					}
 				}
-			} catch (error) {
-				if(browser?.isConnected()) await browser.disconnect();
+			} catch(error) {
 				throw new NodeOperationError(this.getNode(), error as Error, { description: 'Failed to execute action in persistent browser.' });
 			} finally {
-				if (browser?.isConnected()) {
+				if (browser! && browser.isConnected()) {
 					await browser.disconnect();
 				}
 			}
 			return this.prepareOutputData(returnData);
 		} else {
 			// TEMPORARY MODE (Original Logic)
+			isPersistent = false; // Set flag for temporary mode
 			let headless: 'shell' | boolean = options.headless !== false;
 			const headlessShell = options.shell === true;
 			const executablePath = options.executablePath as string;
@@ -449,28 +455,17 @@ export class Puppeteer implements INodeType {
 			const launchArguments = (options.launchArguments as IDataObject) || {};
 			const launchArgs: IDataObject[] = launchArguments.args as IDataObject[];
 			const args: string[] = [];
-			//const device = options.device as string;
+			const device = options.device as string;
 			const protocolTimeout = options.protocolTimeout as number;
 			let batchSize = options.batchSize as number;
 
-			if (!Number.isInteger(batchSize) || batchSize < 1) {
-				batchSize = 1;
+			if (!Number.isInteger(batchSize) || batchSize < 1) batchSize = 1;
+			if (launchArgs?.length) args.push(...launchArgs.map((arg: IDataObject) => arg.arg as string));
+			if (options.addContainerArgs === true) {
+				const missing = CONTAINER_LAUNCH_ARGS.filter(arg => !args.some(existing => existing === arg || existing.startsWith(`${arg}=`)));
+				if (missing.length) args.push(...missing);
 			}
-			if (launchArgs && launchArgs.length > 0) {
-				args.push(...launchArgs.map((arg: IDataObject) => arg.arg as string));
-			}
-			const addContainerArgs = options.addContainerArgs === true;
-			if (addContainerArgs) {
-				const missingContainerArgs = CONTAINER_LAUNCH_ARGS.filter(arg => !args.some(
-					existingArg => existingArg === arg || existingArg.startsWith(`${arg}=`)
-				));
-				if (missingContainerArgs.length > 0) {
-					args.push(...missingContainerArgs);
-				}
-			}
-			if (options.proxyServer) {
-				args.push(`--proxy-server=${options.proxyServer}`);
-			}
+			if (options.proxyServer) args.push(`--proxy-server=${options.proxyServer}`);
 			if (stealth) puppeteer.use(pluginStealth());
 			if (humanTyping) puppeteer.use(pluginHumanTyping(humanTypingOptions));
 			if (headless && headlessShell) headless = 'shell';
@@ -493,20 +488,25 @@ export class Puppeteer implements INodeType {
 					await handleOptions.call(this, itemIndex, items, browser, page);
 
 					if (operation === 'runCustomScript') {
-						return await runCustomScript.call(this, itemIndex, items, browser, page);
+						return await runCustomScript.call(this, itemIndex, items, browser, page, isPersistent);
 					}
-
 					const urlString = this.getNodeParameter('url', itemIndex) as string;
 					const queryParametersOptions = this.getNodeParameter('queryParameters', itemIndex, {}) as IDataObject;
 					const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
-					const url = new URL(urlString);
-					for (const queryParameter of queryParameters) {
-						url.searchParams.append(queryParameter.name, queryParameter.value);
+					let url: URL;
+					try {
+						url = new URL(urlString);
+						for (const queryParameter of queryParameters) {
+							url.searchParams.append(queryParameter.name, queryParameter.value);
+						}
+					} catch (error) {
+						// Pass isPersistent flag
+						return handleError.call(this, new Error(`Invalid URL: ${urlString}`), itemIndex, isPersistent, urlString, page);
 					}
-					return await processPageOperation.call(this, operation, url, page, itemIndex, options);
+					return await processPageOperation.call(this, operation, url, page, itemIndex, options, isPersistent);
 				} catch (error) {
-					// MODIFIED: Call handleError with `isPersistent: false` to preserve original page-closing behavior.
-					return handleError.call(this, error as Error, itemIndex, false, undefined, page);
+					// Pass isPersistent flag
+					return handleError.call(this, error as Error, itemIndex, isPersistent, undefined, page);
 				}
 			};
 
@@ -514,9 +514,7 @@ export class Puppeteer implements INodeType {
 				for (let i = 0; i < items.length; i += batchSize) {
 					const batch = items.slice(i, i + batchSize);
 					const results = await Promise.all(batch.map((item, idx) => processItem(item, i + idx)));
-					if (results?.length) {
-						returnData.push(...results.flat());
-					}
+					if (results?.length) returnData.push(...results.flat());
 				}
 			} finally {
 				if (browser) {
