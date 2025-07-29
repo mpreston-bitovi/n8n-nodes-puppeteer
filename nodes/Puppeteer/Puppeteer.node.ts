@@ -297,6 +297,7 @@ async function processPageOperation(
 				}
 
 				if (fileName) {
+					// @ts-ignore
 					screenshotOptions.path = fileName;
 				}
 
@@ -477,7 +478,6 @@ export class Puppeteer implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const operation = this.getNodeParameter('operation', 0) as string;
 
-		// --- NEW: SESSION MANAGEMENT WITH EARLY RETURN ---
 		if (operation === 'startPersistentBrowser') {
 			const sessionId = this.getNodeParameter('sessionId', 0) as string;
 			const browserManagerUrl = this.getNodeParameter('browserManagerUrl', 0) as string;
@@ -535,7 +535,6 @@ export class Puppeteer implements INodeType {
 			session = { wsEndpoint: manualWsEndpoint, pageId: manualPageId, sessionId: 'manual-override', browserManagerUrl: '' };
 		}
 
-		// --- NEW: PERSISTENT MODE LOGIC WITH EARLY RETURN ---
 		if (session) {
 			const items = this.getInputData();
 			const returnData: INodeExecutionData[] = [];
@@ -570,7 +569,6 @@ export class Puppeteer implements INodeType {
 			return this.prepareOutputData(returnData);
 		}
 
-		// --- ORIGINAL CODE BLOCK FOR TEMPORARY BROWSER (NOW UNTOUCHED) ---
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 		const isPersistent = false;
