@@ -477,6 +477,7 @@ export class Puppeteer implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const operation = this.getNodeParameter('operation', 0) as string;
 
+		// --- NEW: SESSION MANAGEMENT WITH EARLY RETURN ---
 		if (operation === 'startPersistentBrowser') {
 			const sessionId = this.getNodeParameter('sessionId', 0) as string;
 			const browserManagerUrl = this.getNodeParameter('browserManagerUrl', 0) as string;
@@ -524,21 +525,20 @@ export class Puppeteer implements INodeType {
 			}
 		}
 
-		const items = this.getInputData();
-		const returnData: INodeExecutionData[] = [];
 		const options = this.getNodeParameter('options', 0, {}) as IDataObject;
 		let session = this.getWorkflowStaticData('global').puppeteerSession as PuppeteerSessionData | undefined;
-		let isPersistent = !!session;
 
 		if (!session && options.manualSessionOverride === true) {
 			const manualWsEndpoint = options.manualWsEndpoint as string;
 			const manualPageId = options.manualPageId as string;
 			if(!manualWsEndpoint || !manualPageId) throw new NodeOperationError(this.getNode(), 'For Manual Session Override, both WebSocket Endpoint and Page ID are required.');
 			session = { wsEndpoint: manualWsEndpoint, pageId: manualPageId, sessionId: 'manual-override', browserManagerUrl: '' };
-			isPersistent = true;
 		}
 
+		// --- NEW: PERSISTENT MODE LOGIC WITH EARLY RETURN ---
 		if (session) {
+			const items = this.getInputData();
+			const returnData: INodeExecutionData[] = [];
 			const protocolTimeout = options.protocolTimeout as number;
 			let browser: Browser;
 			try {
@@ -553,11 +553,11 @@ export class Puppeteer implements INodeType {
 					await handleOptions.call(this, i, items, browser, page);
 
 					if (operation === 'runCustomScript') {
-						returnData.push(...await runCustomScript.call(this, i, items, browser, page, isPersistent));
+						returnData.push(...await runCustomScript.call(this, i, items, browser, page, true));
 					} else {
 						const urlString = this.getNodeParameter('url', i) as string;
 						const url = new URL(urlString);
-						returnData.push(...await processPageOperation.call(this, operation, url, page, i, options, isPersistent));
+						returnData.push(...await processPageOperation.call(this, operation, url, page, i, options, true));
 					}
 				}
 			} catch(error) {
@@ -568,187 +568,192 @@ export class Puppeteer implements INodeType {
 				}
 			}
 			return this.prepareOutputData(returnData);
-		} else {
-			// TEMPORARY MODE (ORIGINAL LOGIC)
-			let headless: 'shell' | boolean = options.headless !== false;
-			const headlessShell = options.shell === true;
-			const executablePath = options.executablePath as string;
-			const browserWSEndpoint = options.browserWSEndpoint as string;
-			const stealth = options.stealth === true;
-			const humanTyping = options.humanTyping === true;
-			const humanTypingOptions =  {
-				keyboardLayout: "en",
-				...((options.humanTypingOptions as IDataObject) || {})
-			};
-			const launchArguments = (options.launchArguments as IDataObject) || {};
-			const launchArgs: IDataObject[] = launchArguments.args as IDataObject[];
-			const args: string[] = [];
-			const device = options.device as string;
-			const protocolTimeout = options.protocolTimeout as number;
-			let batchSize = options.batchSize as number;
+		}
 
-			if (!Number.isInteger(batchSize) || batchSize < 1) {
-				batchSize = 1;
+		// --- ORIGINAL CODE BLOCK FOR TEMPORARY BROWSER (NOW UNTOUCHED) ---
+		const items = this.getInputData();
+		const returnData: INodeExecutionData[] = [];
+		const isPersistent = false;
+		let headless: 'shell' | boolean = options.headless !== false;
+		const headlessShell = options.shell === true;
+		const executablePath = options.executablePath as string;
+		const browserWSEndpoint = options.browserWSEndpoint as string;
+		const stealth = options.stealth === true;
+		const humanTyping = options.humanTyping === true;
+		const humanTypingOptions =  {
+			keyboardLayout: "en",
+			...((options.humanTypingOptions as IDataObject) || {})
+		};
+		const launchArguments = (options.launchArguments as IDataObject) || {};
+		const launchArgs: IDataObject[] = launchArguments.args as IDataObject[];
+		const args: string[] = [];
+		const device = options.device as string;
+		const protocolTimeout = options.protocolTimeout as number;
+		let batchSize = options.batchSize as number;
+
+		if (!Number.isInteger(batchSize) || batchSize < 1) {
+			batchSize = 1;
+		}
+
+		// More on launch arguments: https://www.chromium.org/developers/how-tos/run-chromium-with-flags/
+		if (launchArgs && launchArgs.length > 0) {
+			args.push(...launchArgs.map((arg: IDataObject) => arg.arg as string));
+		}
+
+		const addContainerArgs = options.addContainerArgs === true;
+		if (addContainerArgs) {
+			const missingContainerArgs = CONTAINER_LAUNCH_ARGS.filter(arg => !args.some(
+				existingArg => existingArg === arg || existingArg.startsWith(`${arg}=`)
+			));
+
+			if (missingContainerArgs.length > 0) {
+				console.log('Puppeteer node: Adding container optimizations:', missingContainerArgs);
+				args.push(...missingContainerArgs);
+			} else {
+				console.log('Puppeteer node: Container optimizations already present in launch arguments');
 			}
+		}
 
-			if (launchArgs && launchArgs.length > 0) {
-				args.push(...launchArgs.map((arg: IDataObject) => arg.arg as string));
+		// More on proxying: https://www.chromium.org/developers/design-documents/network-settings
+		if (options.proxyServer) {
+			args.push(`--proxy-server=${options.proxyServer}`);
+		}
+
+		if (stealth) {
+			puppeteer.use(pluginStealth());
+		}
+		if (humanTyping) {
+			puppeteer.use(pluginHumanTyping(humanTypingOptions));
+		}
+
+		if (headless && headlessShell) {
+			headless = 'shell';
+		}
+
+		let browser: Browser;
+		try {
+			if (browserWSEndpoint) {
+				browser = await puppeteer.connect({
+					browserWSEndpoint,
+					protocolTimeout,
+				});
+			} else {
+				browser = await puppeteer.launch({
+					headless,
+					args,
+					executablePath,
+					protocolTimeout,
+				});
 			}
+		} catch (error) {
+			throw new Error(`Failed to launch/connect to browser: ${(error as Error).message}`);
+		}
 
-			const addContainerArgs = options.addContainerArgs === true;
-			if (addContainerArgs) {
-				const missingContainerArgs = CONTAINER_LAUNCH_ARGS.filter(arg => !args.some(
-					existingArg => existingArg === arg || existingArg.startsWith(`${arg}=`)
-				));
-
-				if (missingContainerArgs.length > 0) {
-					console.log('Puppeteer node: Adding container optimizations:', missingContainerArgs);
-					args.push(...missingContainerArgs);
-				} else {
-					console.log('Puppeteer node: Container optimizations already present in launch arguments');
-				}
-			}
-
-			if (options.proxyServer) {
-				args.push(`--proxy-server=${options.proxyServer}`);
-			}
-
-			if (stealth) {
-				puppeteer.use(pluginStealth());
-			}
-			if (humanTyping) {
-				puppeteer.use(pluginHumanTyping(humanTypingOptions));
-			}
-
-			if (headless && headlessShell) {
-				headless = 'shell';
-			}
-
-			let browser: Browser;
+		const processItem = async (
+			item: INodeExecutionData,
+			itemIndex: number,
+		): Promise<INodeExecutionData[]> => {
+			let page: Page | undefined;
 			try {
-				if (browserWSEndpoint) {
-					browser = await puppeteer.connect({
-						browserWSEndpoint,
-						protocolTimeout,
-					});
-				} else {
-					browser = await puppeteer.launch({
-						headless,
-						args,
-						executablePath,
-						protocolTimeout,
-					});
-				}
-			} catch (error) {
-				throw new Error(`Failed to launch/connect to browser: ${(error as Error).message}`);
-			}
+				page = await browser.newPage();
+				await handleOptions.call(this, itemIndex, items, browser, page);
 
-			const processItem = async (
-				item: INodeExecutionData,
-				itemIndex: number,
-			): Promise<INodeExecutionData[]> => {
-				let page: Page | undefined;
-				try {
-					page = await browser.newPage();
-					await handleOptions.call(this, itemIndex, items, browser, page);
-
-					if (operation === 'runCustomScript') {
-						console.log(
-							`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '} Custom Script`,
-						);
-						return await runCustomScript.call(
-							this,
-							itemIndex,
-							items,
-							browser,
-							page,
-							isPersistent,
-						);
-					}
-						const urlString = this.getNodeParameter('url', itemIndex) as string;
-						const queryParametersOptions = this.getNodeParameter(
-							'queryParameters',
-							itemIndex,
-							{},
-						) as IDataObject;
-
-						const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
-						let url: URL;
-
-						try {
-							url = new URL(urlString);
-							for (const queryParameter of queryParameters) {
-								url.searchParams.append(queryParameter.name, queryParameter.value);
-							}
-						} catch (error) {
-							return handleError.call(
-								this,
-								new Error(`Invalid URL: ${urlString}`),
-								itemIndex,
-								isPersistent,
-								urlString,
-								page,
-							);
-						}
-
-						console.log(
-							`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '}${url}`,
-						);
-
-						return await processPageOperation.call(
-							this,
-							operation,
-							url,
-							page,
-							itemIndex,
-							options,
-							isPersistent,
-						);
-				} catch (error) {
-					return handleError.call(
+				if (operation === 'runCustomScript') {
+					console.log(
+						`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '} Custom Script`,
+					);
+					return await runCustomScript.call(
 						this,
-						error as Error,
 						itemIndex,
-						isPersistent,
-						undefined,
+						items,
+						browser,
 						page,
+						isPersistent,
 					);
-				} finally {
-					if (page) {
-						try {
-							await page.close();
-						} catch (error) {
-							console.error('Error closing page:', error);
-						}
-					}
 				}
-			};
+					const urlString = this.getNodeParameter('url', itemIndex) as string;
+					const queryParametersOptions = this.getNodeParameter(
+						'queryParameters',
+						itemIndex,
+						{},
+					) as IDataObject;
 
-			try {
-				for (let i = 0; i < items.length; i += batchSize) {
-					const batch = items.slice(i, i + batchSize);
-					const results = await Promise.all(
-						batch.map((item, idx) => processItem(item, i + idx)),
-					);
-					if (results?.length) {
-						returnData.push(...results.flat());
-					}
-				}
-			} finally {
-				if (browser) {
+					const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
+					let url: URL;
+
 					try {
-						if (browserWSEndpoint) {
-							await browser.disconnect();
-						} else {
-							await browser.close();
+						url = new URL(urlString);
+						for (const queryParameter of queryParameters) {
+							url.searchParams.append(queryParameter.name, queryParameter.value);
 						}
 					} catch (error) {
-						console.error('Error closing browser:', error);
+						return handleError.call(
+							this,
+							new Error(`Invalid URL: ${urlString}`),
+							itemIndex,
+							isPersistent,
+							urlString,
+							page,
+						);
+					}
+
+					console.log(
+						`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '}${url}`,
+					);
+
+					return await processPageOperation.call(
+						this,
+						operation,
+						url,
+						page,
+						itemIndex,
+						options,
+						isPersistent,
+					);
+			} catch (error) {
+				return handleError.call(
+					this,
+					error as Error,
+					itemIndex,
+					isPersistent,
+					undefined,
+					page,
+				);
+			} finally {
+				if (page) {
+					try {
+						await page.close();
+					} catch (error) {
+						console.error('Error closing page:', error);
 					}
 				}
 			}
+		};
 
-			return this.prepareOutputData(returnData);
+		try {
+			for (let i = 0; i < items.length; i += batchSize) {
+				const batch = items.slice(i, i + batchSize);
+				const results = await Promise.all(
+					batch.map((item, idx) => processItem(item, i + idx)),
+				);
+				if (results?.length) {
+					returnData.push(...results.flat());
+				}
+			}
+		} finally {
+			if (browser) {
+				try {
+					if (browserWSEndpoint) {
+						await browser.disconnect();
+					} else {
+						await browser.close();
+					}
+				} catch (error) {
+					console.error('Error closing browser:', error);
+				}
+			}
 		}
+
+		return this.prepareOutputData(returnData);
 	}
 }
