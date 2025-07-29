@@ -19,7 +19,8 @@
     "lint": "tslint -p tsconfig.json -c tslint.json",
     "lintfix": "tslint --fix -p tsconfig.json -c tslint.json",
     "nodelinter": "nodelinter",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "jest"
   },
   "files": [
     "dist"
@@ -43,12 +44,15 @@
     ]
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@typescript-eslint/parser": "^8.18.1",
     "eslint": "^9.17.0",
     "eslint-plugin-n8n-nodes-base": "^1.16.3",
     "gulp": "^5.0.0",
+    "jest": "^30.0.5",
     "n8n-workflow": "*",
     "prettier": "^3.4.2",
+    "ts-jest": "^29.4.0",
     "typescript": "^5.7.2"
   },
   "peerDependencies": {
