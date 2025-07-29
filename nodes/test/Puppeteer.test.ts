@@ -23,6 +23,8 @@ jest.mock('puppeteer-extra', () => ({
     pages: jest.fn().mockResolvedValue([{
       target: () => ({ _targetId: 'test-page-id' }),
       content: jest.fn().mockResolvedValue('<html><body>Persistent Content</body></html>'),
+      pdf: jest.fn().mockResolvedValue(Buffer.from('fake-pdf-data')),
+      screenshot: jest.fn().mockResolvedValue(Buffer.from('fake-screenshot-data')),
       setUserAgent: jest.fn(),
       setExtraHTTPHeaders: jest.fn(),
       setCacheEnabled: jest.fn(),
@@ -104,6 +106,15 @@ describe('Puppeteer Node', () => {
         const result = await nodeInstance.execute.call(mockExecuteFunctions);
         expect(result[0][0]).toHaveProperty('binary');
         expect(result[0][0].binary?.screenshot).toBeDefined();
+    });
+
+    it('should handle getPDF operation', async () => {
+        const mockExecuteFunctions = createMockExecuteFunctions({
+            'operation': 'getPDF', 'url': 'https://example.com', 'options': {}, 'dataPropertyName': 'pdf',
+        });
+        const result = await nodeInstance.execute.call(mockExecuteFunctions);
+        expect(result[0][0]).toHaveProperty('binary');
+        expect(result[0][0].binary?.pdf).toBeDefined();
     });
 
     it('should handle runCustomScript operation', async () => {
