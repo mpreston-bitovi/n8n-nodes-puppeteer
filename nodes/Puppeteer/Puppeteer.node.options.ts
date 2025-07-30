@@ -62,7 +62,7 @@ export const nodeDescription: INodeTypeDescription = {
 			type: 'string',
 			required: false,
 			default: '',
-			description: 'URL to navigate to. Leave empty to perform an operation on an external persistent browser (requires Browser WebSocket Endpoint).',
+			description: 'URL to navigate to. Leave empty to perform an operation on the current page (requires Browser WebSocket Endpoint).',
 			displayOptions: {
 				show: {
 					operation: ['getPageContent', 'getScreenshot', 'getPDF'],
@@ -549,6 +549,13 @@ export const nodeDescription: INodeTypeDescription = {
 					required: false,
 					default: '',
 					description: 'The WebSocket URL of the browser to connect to. When configured, puppeteer will skip the browser launch and connect to the browser instance.',
+				},
+				{
+					displayName: 'Close Page on Error',
+					name: 'closePageOnError',
+					type: 'boolean',
+					default: true,
+					description: 'If enabled, the page will be closed if an operation fails. Disable this when using a Browser WebSocket Endpoint to keep the page open after an error.',
 				},
 				{
 					displayName: 'Emulate Device',

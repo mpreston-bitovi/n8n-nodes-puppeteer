@@ -82,10 +82,11 @@ async function handleError(
 	this: IExecuteFunctions,
 	error: Error,
 	itemIndex: number,
+	closePageOnError: boolean,
 	url?: string,
 	page?: Page,
 ): Promise<INodeExecutionData[]> {
-	if (page) {
+	if (page && !page.isClosed() && closePageOnError) {
 		try {
 			await page.close();
 		} catch (closeError) {
@@ -157,6 +158,7 @@ async function runCustomScript(
 	items: INodeExecutionData[],
 	browser: Browser,
 	page: Page,
+	closePageOnError: boolean,
 ): Promise<INodeExecutionData[]> {
 	const scriptCode = this.getNodeParameter('scriptCode', itemIndex) as string;
 	const context = {
@@ -201,6 +203,7 @@ async function runCustomScript(
 					'Custom script must return an array of items. Please ensure your script returns an array, e.g., return [{ key: value }].',
 				),
 				itemIndex,
+				closePageOnError,
 				undefined,
 				page,
 			);
@@ -208,7 +211,7 @@ async function runCustomScript(
 
 		return this.helpers.normalizeItems(scriptResult);
 	} catch (error) {
-		return handleError.call(this, error as Error, itemIndex, undefined, page);
+		return handleError.call(this, error as Error, itemIndex, closePageOnError, undefined, page);
 	}
 }
 
@@ -218,6 +221,7 @@ async function processPageOperation(
 	page: Page,
 	itemIndex: number,
 	options: IDataObject,
+	closePageOnError: boolean,
 	url?: URL,
 ): Promise<INodeExecutionData[]> {
 	const waitUntil = options.waitUntil as PuppeteerLifeCycleEvent;
@@ -236,6 +240,7 @@ async function processPageOperation(
 					this,
 					new Error(`Request failed with status code ${response?.status() || 0}`),
 					itemIndex,
+					closePageOnError,
 					url.toString(),
 					page,
 				);
@@ -313,7 +318,7 @@ async function processPageOperation(
 					}];
 				}
 			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, finalUrl, page);
+				return handleError.call(this, error as Error, itemIndex, closePageOnError, finalUrl, page);
 			}
 		}
 
@@ -423,7 +428,7 @@ async function processPageOperation(
 					}];
 				}
 			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, finalUrl, page);
+				return handleError.call(this, error as Error, itemIndex, closePageOnError, finalUrl, page);
 			}
 		}
 
@@ -431,11 +436,12 @@ async function processPageOperation(
 			this,
 			new Error(`Unsupported operation: ${operation}`),
 			itemIndex,
+			closePageOnError,
 			finalUrl,
 			page,
 		);
 	} catch (error) {
-		return handleError.call(this, error as Error, itemIndex, url?.toString(), page);
+		return handleError.call(this, error as Error, itemIndex, closePageOnError, url?.toString(), page);
 	}
 }
 
@@ -485,6 +491,8 @@ export class Puppeteer implements INodeType {
 		const device = options.device as string;
 		const protocolTimeout = options.protocolTimeout as number;
 		let batchSize = options.batchSize as number;
+		const closePageOnError = options.closePageOnError !== false;
+		const isPersistentSession = !!browserWSEndpoint;
 
 		if (!Number.isInteger(batchSize) || batchSize < 1) {
 			batchSize = 1;
@@ -550,7 +558,7 @@ export class Puppeteer implements INodeType {
 		): Promise<INodeExecutionData[]> => {
 			let page: Page | undefined;
 			try {
-				if (browserWSEndpoint) {
+				if (isPersistentSession) {
 					const pages = await browser.pages();
 					if (pages.length === 0) {
 						throw new NodeOperationError(this.getNode(), 'No open pages found in the connected browser session.');
@@ -572,6 +580,7 @@ export class Puppeteer implements INodeType {
 						items,
 						browser,
 						page,
+						closePageOnError,
 					);
 				}
 				const urlString = this.getNodeParameter('url', itemIndex) as string;
@@ -593,11 +602,12 @@ export class Puppeteer implements INodeType {
 							this,
 							new Error(`Invalid URL: ${urlString}`),
 							itemIndex,
+							closePageOnError,
 							urlString,
 							page,
 						);
 					}
-				} else if (!browserWSEndpoint) {
+				} else if (!isPersistentSession) {
 					throw new NodeOperationError(this.getNode(), 'URL is a required field for this operation when not using a Browser WebSocket Endpoint.');
 				}
 
@@ -611,6 +621,7 @@ export class Puppeteer implements INodeType {
 					page,
 					itemIndex,
 					options,
+					closePageOnError,
 					url,
 				);
 			} catch (error) {
@@ -618,11 +629,12 @@ export class Puppeteer implements INodeType {
 					this,
 					error as Error,
 					itemIndex,
+					closePageOnError,
 					undefined,
 					page,
 				);
 			} finally {
-				if (page && !page.isClosed() && !browserWSEndpoint) {
+				if (page && !page.isClosed() && !isPersistentSession) {
 					try {
 						await page.close();
 					} catch (error) {
