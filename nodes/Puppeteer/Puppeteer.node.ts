@@ -23,6 +23,7 @@ import {
 	type PDFOptions,
 	type PuppeteerLifeCycleEvent,
 	type ScreenshotOptions,
+	type HTTPResponse,
 } from 'puppeteer';
 
 import { nodeDescription } from './Puppeteer.node.options';
@@ -214,32 +215,35 @@ async function runCustomScript(
 async function processPageOperation(
 	this: IExecuteFunctions,
 	operation: string,
-	url: URL,
 	page: Page,
 	itemIndex: number,
 	options: IDataObject,
+	url?: URL,
 ): Promise<INodeExecutionData[]> {
 	const waitUntil = options.waitUntil as PuppeteerLifeCycleEvent;
 	const timeout = options.timeout as number;
 
+	let response: HTTPResponse | null = null;
 	try {
-		const response = await page.goto(url.toString(), {
-			waitUntil,
-			timeout,
-		});
+		if (url) {
+			response = await page.goto(url.toString(), {
+				waitUntil,
+				timeout,
+			});
 
-		const headers = await response?.headers();
-		const statusCode = response?.status();
-
-		if (!response || (statusCode && statusCode >= 400)) {
-			return handleError.call(
-				this,
-				new Error(`Request failed with status code ${statusCode || 0}`),
-				itemIndex,
-				url.toString(),
-				page,
-			);
+			if (!response || (response.status() >= 400)) {
+				return handleError.call(
+					this,
+					new Error(`Request failed with status code ${response?.status() || 0}`),
+					itemIndex,
+					url.toString(),
+					page,
+				);
+			}
 		}
+		const headers = response?.headers();
+		const statusCode = response?.status();
+		const finalUrl = url?.toString() ?? page.url();
 
 		if (operation === 'getPageContent') {
 			const body = await page.content();
@@ -248,7 +252,7 @@ async function processPageOperation(
 					body,
 					headers,
 					statusCode,
-					url: url.toString(),
+					url: finalUrl,
 				},
 				pairedItem: {
 					item: itemIndex,
@@ -285,6 +289,7 @@ async function processPageOperation(
 				}
 
 				if (fileName) {
+					// @ts-ignore
 					screenshotOptions.path = fileName;
 				}
 
@@ -300,7 +305,7 @@ async function processPageOperation(
 						json: {
 							headers,
 							statusCode,
-							url: url.toString(),
+							url: finalUrl,
 						},
 						pairedItem: {
 							item: itemIndex,
@@ -308,7 +313,7 @@ async function processPageOperation(
 					}];
 				}
 			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, url.toString(), page);
+				return handleError.call(this, error as Error, itemIndex, finalUrl, page);
 			}
 		}
 
@@ -410,7 +415,7 @@ async function processPageOperation(
 						json: {
 							headers,
 							statusCode,
-							url: url.toString(),
+							url: finalUrl,
 						},
 						pairedItem: {
 							item: itemIndex,
@@ -418,7 +423,7 @@ async function processPageOperation(
 					}];
 				}
 			} catch (error) {
-				return handleError.call(this, error as Error, itemIndex, url.toString(), page);
+				return handleError.call(this, error as Error, itemIndex, finalUrl, page);
 			}
 		}
 
@@ -426,11 +431,11 @@ async function processPageOperation(
 			this,
 			new Error(`Unsupported operation: ${operation}`),
 			itemIndex,
-			url.toString(),
+			finalUrl,
 			page,
 		);
 	} catch (error) {
-		return handleError.call(this, error as Error, itemIndex, url.toString(), page);
+		return handleError.call(this, error as Error, itemIndex, url?.toString(), page);
 	}
 }
 
@@ -480,11 +485,6 @@ export class Puppeteer implements INodeType {
 		const device = options.device as string;
 		const protocolTimeout = options.protocolTimeout as number;
 		let batchSize = options.batchSize as number;
-		const persistentMode = options.persistentMode === true;
-
-		if (persistentMode && !browserWSEndpoint) {
-			throw new NodeOperationError(this.getNode(), 'Persistent Mode requires a Browser WebSocket Endpoint to be configured in the options.');
-		}
 
 		if (!Number.isInteger(batchSize) || batchSize < 1) {
 			batchSize = 1;
@@ -550,7 +550,16 @@ export class Puppeteer implements INodeType {
 		): Promise<INodeExecutionData[]> => {
 			let page: Page | undefined;
 			try {
-				page = await browser.newPage();
+				if (browserWSEndpoint) {
+					const pages = await browser.pages();
+					if (pages.length === 0) {
+						throw new NodeOperationError(this.getNode(), 'No open pages found in the connected browser session.');
+					}
+					page = pages[pages.length - 1];
+				} else {
+					page = await browser.newPage();
+				}
+
 				await handleOptions.call(this, itemIndex, items, browser, page);
 
 				if (operation === 'runCustomScript') {
@@ -565,16 +574,15 @@ export class Puppeteer implements INodeType {
 						page,
 					);
 				}
-					const urlString = this.getNodeParameter('url', itemIndex) as string;
+				const urlString = this.getNodeParameter('url', itemIndex) as string;
+				let url: URL | undefined = undefined;
+				if (urlString) {
 					const queryParametersOptions = this.getNodeParameter(
 						'queryParameters',
 						itemIndex,
 						{},
 					) as IDataObject;
-
 					const queryParameters = (queryParametersOptions.parameters as QueryParameter[]) || [];
-					let url: URL;
-
 					try {
 						url = new URL(urlString);
 						for (const queryParameter of queryParameters) {
@@ -589,19 +597,22 @@ export class Puppeteer implements INodeType {
 							page,
 						);
 					}
+				} else if (!browserWSEndpoint) {
+					throw new NodeOperationError(this.getNode(), 'URL is a required field for this operation when not using a Browser WebSocket Endpoint.');
+				}
 
-					console.log(
-						`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '}${url}`,
-					);
+				console.log(
+					`Processing ${itemIndex + 1} of ${items.length}: [${operation}]${device ? ` [${device}] ` : ' '}${url ? url.toString() : 'on current page'}`,
+				);
 
-					return await processPageOperation.call(
-						this,
-						operation,
-						url,
-						page,
-						itemIndex,
-						options,
-					);
+				return await processPageOperation.call(
+					this,
+					operation,
+					page,
+					itemIndex,
+					options,
+					url,
+				);
 			} catch (error) {
 				return handleError.call(
 					this,
@@ -611,7 +622,7 @@ export class Puppeteer implements INodeType {
 					page,
 				);
 			} finally {
-				if (page && !page.isClosed() && !persistentMode) {
+				if (page && !page.isClosed() && !browserWSEndpoint) {
 					try {
 						await page.close();
 					} catch (error) {
