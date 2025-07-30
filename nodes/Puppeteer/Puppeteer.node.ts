@@ -13,7 +13,7 @@ import { makeResolverFromLegacyOptions, NodeVM } from '@n8n/vm2';
 import puppeteer from 'puppeteer-extra';
 import pluginStealth from 'puppeteer-extra-plugin-stealth';
 //@ts-ignore
-import pluginHumanTyping from 'puppeteer-extra-plugin-human-typing'; 
+import pluginHumanTyping from 'puppeteer-extra-plugin-human-typing';
 import {
 	type Browser,
 	type Device,
@@ -480,6 +480,11 @@ export class Puppeteer implements INodeType {
 		const device = options.device as string;
 		const protocolTimeout = options.protocolTimeout as number;
 		let batchSize = options.batchSize as number;
+		const persistentMode = options.persistentMode === true;
+
+		if (persistentMode && !browserWSEndpoint) {
+			throw new NodeOperationError(this.getNode(), 'Persistent Mode requires a Browser WebSocket Endpoint to be configured in the options.');
+		}
 
 		if (!Number.isInteger(batchSize) || batchSize < 1) {
 			batchSize = 1;
@@ -606,7 +611,7 @@ export class Puppeteer implements INodeType {
 					page,
 				);
 			} finally {
-				if (page) {
+				if (page && !page.isClosed() && !persistentMode) {
 					try {
 						await page.close();
 					} catch (error) {
@@ -633,7 +638,7 @@ export class Puppeteer implements INodeType {
 						await browser.disconnect();
 					} else {
 						await browser.close();
-					}	
+					}
 				} catch (error) {
 					console.error('Error closing browser:', error);
 				}

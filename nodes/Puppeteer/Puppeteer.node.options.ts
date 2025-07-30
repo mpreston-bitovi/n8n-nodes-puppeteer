@@ -550,6 +550,14 @@ export const nodeDescription: INodeTypeDescription = {
 					description: 'The WebSocket URL of the browser to connect to. When configured, puppeteer will skip the browser launch and connect to the browser instance.',
 				},
 				{
+					displayName: 'Persistent Mode',
+					name: 'persistentMode',
+					type: 'boolean',
+					default: false,
+					description: 'When enabled, the node disconnects from the browser instead of closing it, leaving the page open. Requires "Browser WebSocket Endpoint" to be set.',
+					required: false,
+				},
+				{
 					displayName: 'Emulate Device',
 					name: 'device',
 					type: 'options',
@@ -680,7 +688,7 @@ export const nodeDescription: INodeTypeDescription = {
 							description: 'No more than 0 connections for at least 500 ms',
 						},
 						{
-							name: 'networkidle2',
+						  name: 'networkidle2',
 							value: 'networkidle2',
 							description: 'No more than 2 connections for at least 500 ms',
 						},
